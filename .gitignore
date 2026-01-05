@@ -1,0 +1,10 @@
+node_modules/
+.env
+.DS_Store
+*.log
+# Ignore all JSON files by default (for service account keys)
+*.json
+# Whitelist config files
+!package.json
+!package-lock.json
+!vercel.json

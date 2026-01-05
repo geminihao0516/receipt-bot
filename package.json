@@ -1,0 +1,11 @@
+{
+  "name": "receipt-bot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "googleapis": "^169.0.0"
+  }
+}
