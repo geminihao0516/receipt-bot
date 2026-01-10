@@ -189,8 +189,9 @@ async function handleAmuletImageMessage(event, userDescription = '') {
             return;
         }
 
-        // 成功辨識，回傳文案
-        await replyToLine(replyToken, amuletText);
+        // 成功辨識，回傳文案（可能很長需要分段）
+        const userId = event.source.userId || null;
+        await replyToLine(replyToken, amuletText, userId);
 
     } catch (error) {
         console.error('handleAmuletImageMessage error:', error);
@@ -1117,20 +1118,68 @@ function formatSummary(data) {
 }
 
 // === 回覆 Line ===
-async function replyToLine(replyToken, message) {
+async function replyToLine(replyToken, message, userId = null) {
+    const MAX_LENGTH = 4500; // LINE 限制 5000，保留 buffer
+
+    console.log('正在回覆:', replyToken.substring(0, 20) + '...', `訊息長度: ${message.length} 字`);
+
+    // 如果訊息太長，需要分段發送
+    if (message.length > MAX_LENGTH) {
+        console.log(`⚠️ 訊息超過 ${MAX_LENGTH} 字，將分段發送`);
+        const segments = splitMessage(message, MAX_LENGTH);
+
+        // 第一段用 reply API
+        await sendReply(replyToken, segments[0], true);
+
+        // 後續段落用 push API（需要 userId）
+        if (segments.length > 1 && userId) {
+            for (let i = 1; i < segments.length; i++) {
+                const isLast = (i === segments.length - 1);
+                await sendPush(userId, segments[i], isLast);
+            }
+        }
+    } else {
+        await sendReply(replyToken, message, true);
+    }
+}
+
+// === 分割長訊息 ===
+function splitMessage(message, maxLength) {
+    const segments = [];
+    let remaining = message;
+
+    while (remaining.length > 0) {
+        if (remaining.length <= maxLength) {
+            segments.push(remaining);
+            break;
+        }
+
+        // 在 maxLength 內找最後一個換行符號分割，避免文字被切在中間
+        let splitIndex = remaining.lastIndexOf('\n', maxLength);
+        if (splitIndex === -1 || splitIndex < maxLength * 0.5) {
+            // 找不到合適換行，直接在 maxLength 處切
+            splitIndex = maxLength;
+        }
+
+        segments.push(remaining.substring(0, splitIndex));
+        remaining = remaining.substring(splitIndex).trimStart();
+    }
+
+    console.log(`📝 訊息分成 ${segments.length} 段`);
+    return segments;
+}
+
+// === Reply API（使用 replyToken）===
+async function sendReply(replyToken, message, includeQuickReply = false) {
     const url = 'https://api.line.me/v2/bot/message/reply';
 
-    console.log('正在回覆:', replyToken.substring(0, 20) + '...', message.substring(0, 50));
-
-    // 建構回覆 Body，附加 Quick Reply
-    const body = {
-        replyToken: replyToken,
-        messages: [{
-            type: 'text',
-            text: message,
-            quickReply: QUICK_REPLY_ITEMS
-        }]
+    const messageObj = {
+        type: 'text',
+        text: message
     };
+    if (includeQuickReply) {
+        messageObj.quickReply = QUICK_REPLY_ITEMS;
+    }
 
     try {
         const response = await fetch(url, {
@@ -1139,17 +1188,56 @@ async function replyToLine(replyToken, message) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`
             },
-            body: JSON.stringify(body)
+            body: JSON.stringify({
+                replyToken: replyToken,
+                messages: [messageObj]
+            })
         });
 
         const result = await response.text();
-        console.log('Line API 回應:', response.status, result);
+        console.log('Line Reply API 回應:', response.status, result);
 
         if (!response.ok) {
-            console.error('Line API 錯誤:', response.status, result);
+            console.error('Line Reply API 錯誤:', response.status, result);
         }
     } catch (error) {
-        console.error('replyToLine 錯誤:', error);
+        console.error('sendReply 錯誤:', error);
+    }
+}
+
+// === Push API（主動發送，不需 replyToken）===
+async function sendPush(userId, message, includeQuickReply = false) {
+    const url = 'https://api.line.me/v2/bot/message/push';
+
+    const messageObj = {
+        type: 'text',
+        text: message
+    };
+    if (includeQuickReply) {
+        messageObj.quickReply = QUICK_REPLY_ITEMS;
+    }
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`
+            },
+            body: JSON.stringify({
+                to: userId,
+                messages: [messageObj]
+            })
+        });
+
+        const result = await response.text();
+        console.log('Line Push API 回應:', response.status, result);
+
+        if (!response.ok) {
+            console.error('Line Push API 錯誤:', response.status, result);
+        }
+    } catch (error) {
+        console.error('sendPush 錯誤:', error);
     }
 }
 
