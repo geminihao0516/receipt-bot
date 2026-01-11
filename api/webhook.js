@@ -1079,10 +1079,17 @@ async function getAudioFromLine(messageId) {
         throw new Error('LINE_API_ERROR');
     }
 
-    const contentType = response.headers.get('content-type') || 'audio/m4a';
+    const rawContentType = response.headers.get('content-type') || 'audio/m4a';
     const audioBuffer = Buffer.from(await response.arrayBuffer());
 
-    console.log(`下載語音: ${(audioBuffer.length / 1024).toFixed(2)}KB, MIME: ${contentType}`);
+    // 轉換 MIME type：LINE 的 audio/x-m4a 和 audio/m4a 需轉換為 Gemini 支援的 audio/mp4
+    let contentType = rawContentType;
+    if (rawContentType.includes('m4a') || rawContentType.includes('aac')) {
+        contentType = 'audio/mp4';
+        console.log(`🔄 MIME 轉換: ${rawContentType} → ${contentType}`);
+    }
+
+    console.log(`下載語音: ${(audioBuffer.length / 1024).toFixed(2)}KB, 原始MIME: ${rawContentType}, 使用MIME: ${contentType}`);
 
     // 檢查檔案大小
     const sizeInMB = audioBuffer.length / (1024 * 1024);
@@ -1132,28 +1139,47 @@ async function recognizeAudio(audioData) {
 
         const result = await response.json();
 
+        console.log('📥 Gemini 語音 API 回應狀態:', response.status);
+
         // 處理錯誤
         if (result.error) {
             console.error('❌ Gemini 語音 API 錯誤:', JSON.stringify(result.error, null, 2));
             if (result.error.code === 429 || result.error.status === 'RESOURCE_EXHAUSTED') {
                 throw new Error('QUOTA_EXCEEDED');
             }
+            // 格式不支援的錯誤
+            if (result.error.message && result.error.message.includes('Unsupported')) {
+                console.error('❌ 音訊格式不支援:', mimeType);
+            }
             return null;
         }
 
         if (!result.candidates || !result.candidates[0]) {
-            console.error('❌ Gemini 語音 API 無回應');
+            console.error('❌ Gemini 語音 API 無回應，完整結果:', JSON.stringify(result, null, 2));
+            return null;
+        }
+
+        // 檢查 finishReason
+        const finishReason = result.candidates[0].finishReason;
+        if (finishReason === 'SAFETY') {
+            console.error('❌ 語音內容被安全過濾器阻擋');
+            return null;
+        }
+
+        if (!result.candidates[0].content || !result.candidates[0].content.parts || !result.candidates[0].content.parts[0]) {
+            console.error('❌ Gemini 語音 API 回應格式異常:', JSON.stringify(result.candidates[0], null, 2));
             return null;
         }
 
         const recognizedText = result.candidates[0].content.parts[0].text.trim();
-        console.log('📝 Gemini 語音識別:', recognizedText);
+        console.log('📝 Gemini 語音識別成功:', recognizedText);
 
         return recognizedText;
 
     } catch (error) {
         if (error.message === 'QUOTA_EXCEEDED') throw error;
-        console.error('❌ 語音識別錯誤:', error);
+        console.error('❌ 語音識別錯誤:', error.message || error);
+        console.error('❌ 錯誤堆疊:', error.stack);
         return null;
     }
 }
