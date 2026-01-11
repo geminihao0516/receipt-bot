@@ -233,13 +233,8 @@ async function handleFortuneAudioMessage(event) {
 
         console.log(`收到命理語音: ${messageId}, 長度: ${duration}ms`);
 
-        // 檢查語音長度（命理解讀可能較長，允許 5 分鐘）
-        if (duration > 300000) { // 超過 5 分鐘
-            await replyToLine(replyToken,
-                '⚠️ 語音太長，請控制在 5 分鐘內\n' +
-                '⚠️ เสียงยาวเกินไป กรุณาไม่เกิน 5 นาที');
-            return;
-        }
+        // 語音長度不限制
+        console.log(`📝 命理語音長度: ${(duration / 1000 / 60).toFixed(1)} 分鐘`);
 
         // 從 Line 下載語音
         const audioData = await getAudioFromLine(messageId);
@@ -377,7 +372,7 @@ async function translateFortuneText(text) {
 ${text}`;
 
     // 使用 Gemini 2.5 Pro
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -518,7 +513,7 @@ ${userInfoSection}
 ❌ 不虛構不存在的師父或寺廟`;
 
     // 使用 Gemini 2.5 Pro
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -991,7 +986,7 @@ async function parseTextWithGemini(text) {
 }
 沒數量填1，沒單價用總額。只回純 JSON，不要 markdown。`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -1091,7 +1086,7 @@ async function recognizeAudio(audioData) {
 只回傳轉錄的文字，不要有其他說明。`;
 
     // 使用 Gemini 2.5 Pro
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -1181,7 +1176,7 @@ JSON格式（盡量簡潔）：
 - 品項名稱不要超過20字
 - 日期如果看不清楚，填空字串""，不要隨便猜！`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     const response = await fetch(url, {
         method: 'POST',
