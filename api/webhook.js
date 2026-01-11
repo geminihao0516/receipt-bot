@@ -16,7 +16,7 @@ const CONFIG = {
 };
 
 // === 用戶模式追蹤（in-memory，Vercel 可能重啟會清空）===
-// 格式: userId -> { mode: 'receipt' | 'amulet', description: '暂存的文字描述' }
+// 格式: userId -> { mode: 'receipt' | 'amulet' | 'fortune', description: '暂存的文字描述' }
 const userModeMap = new Map();
 
 module.exports = async (req, res) => {
@@ -52,7 +52,14 @@ module.exports = async (req, res) => {
                 } else if (event.message.type === 'text') {
                     await handleTextMessage(event);
                 } else if (event.message.type === 'audio') {
-                    await handleAudioMessage(event);
+                    // 根據用戶模式決定處理方式
+                    const userState = userModeMap.get(userId) || { mode: 'receipt' };
+                    if (userState.mode === 'fortune') {
+                        await handleFortuneAudioMessage(event);
+                        userModeMap.delete(userId); // 處理完自動切回收據模式
+                    } else {
+                        await handleAudioMessage(event);
+                    }
                 }
             } catch (error) {
                 console.error('處理事件錯誤:', error);
@@ -217,6 +224,203 @@ async function handleAmuletImageMessage(event, userDescription = '') {
     }
 }
 
+// === 處理命理語音翻譯訊息 ===
+async function handleFortuneAudioMessage(event) {
+    try {
+        const messageId = event.message.id;
+        const replyToken = event.replyToken;
+        const duration = event.message.duration; // 語音長度（毫秒）
+
+        console.log(`收到命理語音: ${messageId}, 長度: ${duration}ms`);
+
+        // 檢查語音長度（命理解讀可能較長，允許 5 分鐘）
+        if (duration > 300000) { // 超過 5 分鐘
+            await replyToLine(replyToken,
+                '⚠️ 語音太長，請控制在 5 分鐘內\n' +
+                '⚠️ เสียงยาวเกินไป กรุณาไม่เกิน 5 นาที');
+            return;
+        }
+
+        // 從 Line 下載語音
+        const audioData = await getAudioFromLine(messageId);
+
+        // Gemini 語音識別
+        const recognizedText = await recognizeAudio(audioData);
+
+        if (!recognizedText || recognizedText.trim() === '') {
+            await replyToLine(replyToken,
+                '❌ 無法識別語音，請重新錄製\n' +
+                '建議：\n' +
+                '1. 說話清晰\n' +
+                '2. 環境安靜\n' +
+                '3. 靠近麥克風\n\n' +
+                '❌ ฟังไม่ชัด กรุณาอัดใหม่\n' +
+                'คำแนะนำ:\n' +
+                '1. พูดชัดๆ\n' +
+                '2. ที่เงียบๆ\n' +
+                '3. ใกล้ไมค์');
+            return;
+        }
+
+        console.log(`✅ 命理語音識別成功，字數: ${recognizedText.length}`);
+
+        // 使用命理老師提示詞進行翻譯
+        const fortuneText = await translateFortuneText(recognizedText);
+
+        if (!fortuneText) {
+            await replyToLine(replyToken,
+                '❌ 翻譯處理失敗，請稍後再試\n' +
+                '❌ แปลไม่ได้ ลองใหม่ทีหลัง');
+            return;
+        }
+
+        // 回傳翻譯結果
+        await replyToLine(replyToken, fortuneText);
+
+    } catch (error) {
+        console.error('handleFortuneAudioMessage error:', error);
+        if (error.message === 'QUOTA_EXCEEDED') {
+            await replyToLine(event.replyToken,
+                '❌ 免費額度已滿，請稍後再試\n' +
+                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ');
+        } else if (error.message === 'AUDIO_TOO_LARGE') {
+            await replyToLine(event.replyToken,
+                '❌ 語音檔案太大\n' +
+                '❌ ไฟล์เสียงใหญ่เกินไป');
+        } else {
+            await replyToLine(event.replyToken,
+                '❌ 處理失敗，請重試\n' +
+                '❌ ผิดพลาด ลองใหม่นะ');
+        }
+    }
+}
+
+// === Gemini 命理翻譯（台灣命理老師口吻）===
+async function translateFortuneText(text) {
+    const prompt = `【角色設定】
+
+你是一位資深的台灣命理老師，長年從事一對一諮詢。說話風格親切穩重、不誇大、不渲染，語氣自然真誠，就像坐在緣主對面慢慢解說。你的重點是把話說清楚、說到心裡，而不是使用術語或理論名詞。
+
+【核心任務】
+
+我將提供一份來自泰國命理師的解讀素材，可能是語音逐字稿、泰文原文，或初步翻譯的中文內容。
+
+請你完整理解該素材後，以素材本身的敘述順序與重點為主軸進行整理與重寫，轉化為一篇「台灣命理老師口吻」的一對一解說文。
+
+全文長度約 800 至 1000 字，重點在於讓緣主聽得懂、聽得進去，而不是完整覆蓋所有命理面向。
+
+【敘述視角與語氣】
+
+全篇一律使用第二人稱，直接對緣主說話。
+
+語氣需自然、沉穩、有節奏，貼近實際面對面諮詢時的說話方式，而非書面報告或教科書語氣。
+
+可參考的自然說法例如：
+「這一段時間你在工作上，會慢慢感覺到方向有些不一樣。」
+「錢的部分，不是沒有進來，而是比較需要你自己顧好流向。」
+
+【台灣語感指引】
+
+可自然融入以下類型語感，但不需刻意每句都使用：
+穩紮穩打、見好就收、順著走就好、不要太衝、量力而為、把話想過再說、慢慢來比較快
+
+【內容組織原則（重要）】
+
+一、內容段落的先後順序，必須以提供的檔案或音檔實際提到的順序為準，不可自行調整成固定模板。
+
+二、若素材先談工作，再談感情或健康，請依該順序撰寫；若內容反覆穿插，請整理成語意連貫但不違背原意的段落。
+
+三、下列面向僅作為「可能出現的主題參考」，不是必須完整涵蓋：
+事業與工作、財運狀況、健康與生活、整體提醒與祝福。
+
+四、素材未提及的面向，請直接略過，不需補寫或推論。
+
+【嚴格禁用詞彙】
+
+全文不得出現以下任何字詞：
+資料、文本、原文、命盤、內容、文件、分析、顯示、指出
+
+【禁止事項】
+
+一、不可出現任何泰文。
+若素材中有咒語或祝福語，僅可轉述為「這是一段祈福的話語，象徵平安與加持」。
+
+二、不可虛構或補齊素材未提及的命理資訊。
+只能在原有敘述基礎上進行語感轉化與順寫整理。
+
+【格式限制】
+
+一、全文僅使用純文字段落。
+二、不使用任何 Markdown 語法或視覺標記。
+三、不使用項目符號、編號列表或括號補充說明。
+四、不使用 emoji 或特殊符號。
+
+【語氣限制】
+
+避免過度口語或聊天感的詞語，例如：
+咱們、嘿嘿、來來來、 啦啦啦
+
+不加入玩笑、流行語或與命理無關的閒聊。
+
+【素材不足時的處理原則】
+
+請嚴格以提供的素材為依據整理與轉述。
+有提到的才寫，沒提到的就不寫，不補、不猜、不延伸。
+
+【最終輸出要求】
+
+請直接輸出完整解說文。
+不加任何前言、說明或提示語。
+文章結尾請以溫暖、穩定、具有方向感的提醒與祝福作結。
+
+【素材內容】
+${text}`;
+
+    // 使用 Gemini 2.5 Pro
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    temperature: 0.7,  // 適中創意度
+                    maxOutputTokens: 4096  // 較長解說文
+                }
+            })
+        });
+
+        const result = await response.json();
+
+        // 處理錯誤
+        if (result.error) {
+            console.error('❌ Gemini Fortune API 錯誤:', JSON.stringify(result.error, null, 2));
+            if (result.error.code === 429 || result.error.status === 'RESOURCE_EXHAUSTED') {
+                throw new Error('QUOTA_EXCEEDED');
+            }
+            return null;
+        }
+
+        if (!result.candidates || !result.candidates[0]) {
+            console.error('❌ Gemini Fortune API 無回應');
+            return null;
+        }
+
+        const fortuneText = result.candidates[0].content.parts[0].text;
+        console.log('🔮 命理翻譯成功，字數:', fortuneText.length);
+
+        return fortuneText;
+
+    } catch (error) {
+        if (error.message === 'QUOTA_EXCEEDED') throw error;
+        console.error('❌ 命理翻譯錯誤:', error);
+        return null;
+    }
+}
+
+
 // === Gemini 佛牌聖物辨識與文案生成 ===
 async function recognizeAmulet(imageData, userDescription = '') {
     const { buffer: imageBuffer, mimeType } = imageData;
@@ -313,8 +517,8 @@ ${userInfoSection}
 ❌ 避免保證靈驗、必定成功等誇大詞彙
 ❌ 不虛構不存在的師父或寺廟`;
 
-    // 使用 Gemini 2.5 Flash（Pro 免費額度太少容易限流）
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 使用 Gemini 2.5 Pro
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -405,6 +609,14 @@ const QUICK_REPLY_ITEMS = {
             type: 'action',
             action: {
                 type: 'message',
+                label: '🔮 語音翻譯 / แปล',
+                text: '語音翻譯'
+            }
+        },
+        {
+            type: 'action',
+            action: {
+                type: 'message',
                 label: '❓ 說明 / คู่มือ',
                 text: '說明'
             }
@@ -465,6 +677,22 @@ async function handleTextMessage(event) {
                 '① พิมพ์ข้อมูล (ถ้ามี)\n' +
                 '→ ชื่ออาจารย์ ชื่อพระ พุทธคุณ\n\n' +
                 '② ส่งรูปพระ\n\n' +
+                '💡 輸入「取消」可退出\n' +
+                '💡 พิมพ์ "ยกเลิก" เพื่อออก');
+            return;
+        }
+
+        // 語音翻譯模式（點擊後上傳的語音會進行命理解讀翻譯）
+        if (['語音翻譯', 'แปล', 'แปลเสียง'].includes(text)) {
+            const userId = event.source.userId || 'unknown';
+            userModeMap.set(userId, { mode: 'fortune', description: '' });
+            await replyToLine(replyToken,
+                '🔮 語音翻譯模式\n\n' +
+                '請上傳命理語音檔案（m4a）\n' +
+                'AI 會將內容轉化為台灣命理老師解說文\n\n' +
+                '🔮 โหมดแปลเสียง\n\n' +
+                'อัปโหลดไฟล์เสียงโหราศาสตร์ (m4a)\n' +
+                'AI จะแปลเป็นคำอธิบายของครูโหราศาสตร์\n\n' +
                 '💡 輸入「取消」可退出\n' +
                 '💡 พิมพ์ "ยกเลิก" เพื่อออก');
             return;
@@ -763,7 +991,7 @@ async function parseTextWithGemini(text) {
 }
 沒數量填1，沒單價用總額。只回純 JSON，不要 markdown。`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -862,8 +1090,8 @@ async function recognizeAudio(audioData) {
 
 只回傳轉錄的文字，不要有其他說明。`;
 
-    // 使用 Gemini 2.5 Flash（和圖片、文字統一模型）
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 使用 Gemini 2.5 Pro
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -953,7 +1181,7 @@ JSON格式（盡量簡潔）：
 - 品項名稱不要超過20字
 - 日期如果看不清楚，填空字串""，不要隨便猜！`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     const response = await fetch(url, {
         method: 'POST',
