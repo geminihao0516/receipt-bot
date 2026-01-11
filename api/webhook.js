@@ -7,12 +7,24 @@
 const { google } = require('googleapis');
 
 const CONFIG = {
+    // === LINE API ===
     LINE_CHANNEL_ACCESS_TOKEN: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+
+    // === Gemini API ===
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_MODEL: 'gemini-2.5-flash',  // 目前使用的模型
+
+    // === Google Sheets ===
     SPREADSHEET_ID: process.env.SPREADSHEET_ID,
     SHEET_NAME: '收據記錄',
     GOOGLE_SERVICE_ACCOUNT_EMAIL: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    GOOGLE_PRIVATE_KEY: (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n').replace(/"/g, '') // 處理換行符號與多餘引號
+    GOOGLE_PRIVATE_KEY: (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n').replace(/"/g, ''),
+
+    // === 限制常數 ===
+    MAX_IMAGE_SIZE_MB: 4,
+    MAX_AUDIO_SIZE_MB: 10,
+    MAX_AUDIO_DURATION_MS: 60000,  // 一般語音記帳 60 秒限制
+    MAX_LINE_MESSAGE_LENGTH: 4500  // LINE 限制 5000，保留 buffer
 };
 
 // === 用戶模式追蹤（in-memory，Vercel 可能重啟會清空）===
@@ -371,8 +383,8 @@ async function translateFortuneText(text) {
 【素材內容】
 ${text}`;
 
-    // 使用 Gemini 2.5 Pro
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 使用 Gemini 2.5 Flash
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -512,8 +524,8 @@ ${userInfoSection}
 ❌ 避免保證靈驗、必定成功等誇大詞彙
 ❌ 不虛構不存在的師父或寺廟`;
 
-    // 使用 Gemini 2.5 Pro
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 使用 Gemini 2.5 Flash
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -792,7 +804,7 @@ async function handleAudioMessage(event) {
         console.log(`收到語音訊息: ${messageId}, 長度: ${duration}ms`);
 
         // 檢查語音長度（避免太長的語音）
-        if (duration > 60000) { // 超過 60 秒
+        if (duration > CONFIG.MAX_AUDIO_DURATION_MS) {
             await replyToLine(replyToken,
                 '⚠️ 語音太長，請控制在 60 秒內\n' +
                 '⚠️ เสียงยาวเกินไป กรุณาไม่เกิน 60 วินาที'
@@ -986,7 +998,7 @@ async function parseTextWithGemini(text) {
 }
 沒數量填1，沒單價用總額。只回純 JSON，不要 markdown。`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -1037,6 +1049,12 @@ async function getImageFromLine(messageId) {
         }
     });
 
+    // 檢查 LINE API 回應
+    if (!response.ok) {
+        console.error(`❌ LINE 圖片下載失敗: ${response.status} ${response.statusText}`);
+        throw new Error('LINE_API_ERROR');
+    }
+
     const contentType = response.headers.get('content-type') || 'image/jpeg';
     const imageBuffer = Buffer.from(await response.arrayBuffer());
 
@@ -1055,14 +1073,20 @@ async function getAudioFromLine(messageId) {
         }
     });
 
+    // 檢查 LINE API 回應
+    if (!response.ok) {
+        console.error(`❌ LINE 語音下載失敗: ${response.status} ${response.statusText}`);
+        throw new Error('LINE_API_ERROR');
+    }
+
     const contentType = response.headers.get('content-type') || 'audio/m4a';
     const audioBuffer = Buffer.from(await response.arrayBuffer());
 
     console.log(`下載語音: ${(audioBuffer.length / 1024).toFixed(2)}KB, MIME: ${contentType}`);
 
-    // 檢查檔案大小（LINE 語音通常 < 10MB）
+    // 檢查檔案大小
     const sizeInMB = audioBuffer.length / (1024 * 1024);
-    if (sizeInMB > 10) {
+    if (sizeInMB > CONFIG.MAX_AUDIO_SIZE_MB) {
         throw new Error('AUDIO_TOO_LARGE');
     }
 
@@ -1085,8 +1109,8 @@ async function recognizeAudio(audioData) {
 
 只回傳轉錄的文字，不要有其他說明。`;
 
-    // 使用 Gemini 2.5 Pro
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 使用 Gemini 2.5 Flash
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -1176,7 +1200,7 @@ JSON格式（盡量簡潔）：
 - 品項名稱不要超過20字
 - 日期如果看不清楚，填空字串""，不要隨便猜！`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     const response = await fetch(url, {
         method: 'POST',
@@ -1342,7 +1366,7 @@ function formatSummary(data) {
 
 // === 回覆 Line ===
 async function replyToLine(replyToken, message, userId = null) {
-    const MAX_LENGTH = 4500; // LINE 限制 5000，保留 buffer
+    const MAX_LENGTH = CONFIG.MAX_LINE_MESSAGE_LENGTH;
 
     console.log('正在回覆:', replyToken.substring(0, 20) + '...', `訊息長度: ${message.length} 字`);
 
