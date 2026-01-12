@@ -55,8 +55,15 @@ function selectModel(task, context = {}) {
 }
 
 // === 用戶模式追蹤（in-memory，Vercel 可能重啟會清空）===
-// 格式: userId -> { mode: 'receipt' | 'amulet' | 'fortune', description: '暂存的文字描述' }
+// 格式: userId -> { 
+//   mode: 'receipt' | 'amulet' | 'fortune', 
+//   description: '暂存的文字描述',
+//   images: [{ base64, mimeType }]  // 多圖暫存
+// }
 const userModeMap = new Map();
+
+// === 多圖設定 ===
+const MAX_AMULET_IMAGES = 5;  // 最多收集 5 張圖片
 
 module.exports = async (req, res) => {
     // GET 請求：驗證用
@@ -83,8 +90,8 @@ module.exports = async (req, res) => {
                     // 根據用戶模式決定處理方式
                     const userState = userModeMap.get(userId) || { mode: 'receipt' };
                     if (userState.mode === 'amulet') {
-                        await handleAmuletImageMessage(event, userState.description || '');
-                        userModeMap.delete(userId); // 處理完自動切回收據模式
+                        // 多圖收集模式：暫存圖片，不立即處理
+                        await collectAmuletImage(event, userId, userState);
                     } else {
                         await handleImageMessage(event);
                     }
@@ -258,6 +265,119 @@ async function handleAmuletImageMessage(event, userDescription = '') {
             await replyToLine(event.replyToken,
                 '❌ 系統錯誤，請稍後再試\n' +
                 '❌ ผิดพลาด ลองใหม่ภายหลัง'
+            );
+        }
+    }
+}
+
+// === 收集佛牌圖片（多圖模式）===
+async function collectAmuletImage(event, userId, userState) {
+    try {
+        const messageId = event.message.id;
+        const replyToken = event.replyToken;
+
+        // 初始化 images 陣列
+        if (!userState.images) {
+            userState.images = [];
+        }
+
+        // 檢查是否已達上限
+        if (userState.images.length >= MAX_AMULET_IMAGES) {
+            await replyToLine(replyToken,
+                `⚠️ 已達 ${MAX_AMULET_IMAGES} 張上限\n` +
+                '輸入「完成」生成文案\n' +
+                '輸入「清除」重新開始\n\n' +
+                `⚠️ ครบ ${MAX_AMULET_IMAGES} รูปแล้ว\n` +
+                'พิมพ์ "เสร็จ" เพื่อสร้าง\n' +
+                'พิมพ์ "ล้าง" เพื่อเริ่มใหม่'
+            );
+            return;
+        }
+
+        // 從 LINE 下載圖片
+        const imageData = await getImageFromLine(messageId);
+        const base64Image = imageData.buffer.toString('base64');
+
+        // 暫存圖片
+        userState.images.push({
+            base64: base64Image,
+            mimeType: imageData.mimeType
+        });
+        userModeMap.set(userId, userState);
+
+        const count = userState.images.length;
+        console.log(`📿 佛牌圖片收集: ${count}/${MAX_AMULET_IMAGES}`);
+
+        // 簡短確認（不消耗太多 reply）
+        await replyToLine(replyToken,
+            `📷 已收到第 ${count} 張圖片\n` +
+            (count < MAX_AMULET_IMAGES
+                ? `可繼續傳圖（最多 ${MAX_AMULET_IMAGES} 張）\n`
+                : `已達上限\n`) +
+            '\n輸入「完成」→ 生成文案\n' +
+            '輸入「取消」→ 退出模式\n\n' +
+            `📷 รับรูปที่ ${count} แล้ว\n` +
+            `พิมพ์ "เสร็จ" → สร้างบทความ`
+        );
+
+    } catch (error) {
+        console.error('collectAmuletImage error:', error);
+        await replyToLine(event.replyToken,
+            '❌ 圖片處理失敗，請重傳\n' +
+            '❌ รูปผิดพลาด ส่งใหม่นะ'
+        );
+    }
+}
+
+// === 處理多圖佛牌文案生成 ===
+async function processMultiImageAmulet(event, userId, userState) {
+    try {
+        const replyToken = event.replyToken;
+        const images = userState.images || [];
+        const description = userState.description || '';
+
+        if (images.length === 0) {
+            await replyToLine(replyToken,
+                '⚠️ 還沒有圖片！\n' +
+                '請先傳佛牌照片\n\n' +
+                '⚠️ ยังไม่มีรูป!\n' +
+                'ส่งรูปพระก่อนนะ'
+            );
+            return;
+        }
+
+        console.log(`📿 開始處理多圖佛牌: ${images.length} 張圖片, 描述: ${description || '(無)'}`);
+
+        // 調用多圖辨識
+        const amuletText = await recognizeAmuletMultiImage(images, description);
+
+        if (!amuletText) {
+            await replyToLine(replyToken,
+                '❌ 無法辨識，請確認圖片清晰\n' +
+                '❌ อ่านไม่ได้ รูปชัดไหม'
+            );
+            // 不清除狀態，讓用戶可以重試或補傳
+            return;
+        }
+
+        // 成功生成，清除狀態
+        userModeMap.delete(userId);
+
+        // 回傳文案
+        await replyToLine(replyToken, amuletText, userId);
+
+    } catch (error) {
+        console.error('processMultiImageAmulet error:', error);
+
+        if (error.message === 'QUOTA_EXCEEDED') {
+            await replyToLine(event.replyToken,
+                '❌ API 額度已滿，請稍後再試\n' +
+                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลัง'
+            );
+        } else {
+            await replyToLine(event.replyToken,
+                '❌ 處理失敗，請重試\n' +
+                '❌ ผิดพลาด ลองใหม่นะ'
             );
         }
     }
@@ -611,6 +731,166 @@ ${userInfoSection}
     }
 }
 
+// === Gemini 多圖佛牌辨識與文案生成 ===
+async function recognizeAmuletMultiImage(images, userDescription = '') {
+    if (!images || images.length === 0) {
+        console.error('❌ 沒有圖片可處理');
+        return null;
+    }
+
+    console.log(`📿 多圖佛牌辨識: ${images.length} 張圖片`);
+
+    // 用戶提供的資訊區塊
+    const userInfoSection = userDescription
+        ? `\n【用戶提供的資訊 - 請優先參考】\n${userDescription}\n\n請務必將用戶提供的師父名稱、佛牌名稱、功效等資訊融入文案中！\n`
+        : '';
+
+    // 多圖專用提示詞
+    const prompt = `你是一位「泰國佛牌聖物與法事翻譯」專家，兼具「宗教文化顧問」及「跨市場在地化行銷編輯」身份。
+
+【重要：這是多張圖片】
+我提供了 ${images.length} 張同一件佛牌/聖物的照片（可能包含正面、背面、細節、包裝等）。
+請綜合分析所有圖片，生成一篇完整的行銷文案。
+${userInfoSection}
+【重要格式規範】
+⚠️ 文案將用於LINE發送，請嚴格遵守：
+→ 禁止Markdown語法（無粗體、標題符號、項目符號）
+→ 使用表情符號（✨🙏📿💰⚠️）作為段落區隔
+→ 每段控制3-5行，總字數800-1200字
+→ 條列項目用①②③或→開頭，不用「-」「•」「*」
+
+【核心原則】
+① 文化尊重：基於泰國宗教文化，避免過度神化或不實宣傳
+② 資訊透明：當圖像資訊不足時，明確標示「根據法相/風格推測」
+
+【圖像分析】
+請綜合 ${images.length} 張圖片完成以下分析：
+
+「聖物鑑別」
+→ 類別：佛牌（正牌/陰牌）、符管、冠蘭聖物、法刀、路翁、魂魄勇或其他
+→ 法相/主題：崇迪、必打、四面神、象神、澤度金、坤平將軍、古曼童、人緣鳥等
+
+「師父與法脈」
+→ 從僧袍顏色、刺符圖案、特定標記推測師父身份或法脈
+→ 判斷是佛寺法會還是阿贊私人法壇
+
+「材質與工藝」
+→ 主要材料：經粉、廟土、香灰、金屬（銅、銀、阿巴嘎）、草藥、聖木、特殊料
+→ 風格：古樸、華麗、寫實，以及新舊程度
+
+「功效推論」
+→ 法相＋師父法門＋加持儀式＋材料＝主要功效
+
+【輸出格式】
+
+✨[功效關鍵詞] + [聖物類型] ✨
+[師父/寺廟名] 佛曆[年份] [版本/材質]
+
+🙏 師父傳承
+（40-60字：師父修行背景、擅長法門，建立權威性）
+
+📿 聖物故事
+（80-120字：製作緣起、材料特殊之處、加持過程的神聖與嚴謹）
+
+💰 傳統功效
+① 財運事業：正財、偏財、攬客、助生意
+② 人緣魅力：異性緣、桃花、貴人運
+③ 避險擋災：擋降、避官非、防小人
+
+👤 適合對象
+① （具體情境1）
+② （具體情境2）
+③ （具體情境3）
+
+🔮 材質用料
+（列出可辨識材料，若推測請註明「據信加入」）
+
+📖 佩戴方式
+→ 佩戴位置
+→ 注意事項
+
+🔸 心咒
+先唸三遍：
+納摩達薩 帕嘎瓦多 阿拉哈多 三藐三菩陀薩
+
+再唸X遍：
+（繁體中文音譯心咒，若無特定心咒則註明：誠心默念祈願即可）
+
+⚠️ 注意事項
+① 正牌不可佩戴低於腰部
+② 洗澡、就寢時建議取下以示尊重
+③ （其他適用注意事項）
+
+【寫作原則】
+✅ 無法確認的資訊標註「依外觀推測」「據信」
+✅ 使用「信眾認為」「相傳」避免絕對承諾
+❌ 避免保證靈驗、必定成功等誇大詞彙
+❌ 不虛構不存在的師父或寺廟`;
+
+    // 組裝多圖 parts
+    const parts = [{ text: prompt }];
+    for (const img of images) {
+        parts.push({
+            inline_data: {
+                mime_type: img.mimeType,
+                data: img.base64
+            }
+        });
+    }
+
+    // 多圖情況下傾向使用 Pro 模型以獲得更好的綜合分析
+    const hasUserInfo = userDescription && userDescription.trim().length > 0;
+    const model = images.length > 2 ? 'gemini-2.5-pro' : selectModel('amulet', { hasUserInfo });
+    console.log(`📿 多圖佛牌文案使用模型: ${model} (圖片數: ${images.length}, 有用戶資訊: ${hasUserInfo})`);
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts }],
+                generationConfig: {
+                    temperature: 0.7,
+                    maxOutputTokens: 4096
+                }
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+            console.error('❌ Gemini Multi-Image API 錯誤:', JSON.stringify(result.error, null, 2));
+            if (result.error.code === 429 || result.error.status === 'RESOURCE_EXHAUSTED') {
+                throw new Error('QUOTA_EXCEEDED');
+            }
+            return null;
+        }
+
+        if (!result.candidates || !result.candidates[0]) {
+            console.error('❌ Gemini Multi-Image API 無回應');
+            return null;
+        }
+
+        const finishReason = result.candidates[0].finishReason;
+        if (finishReason === 'SAFETY') {
+            console.error('❌ 內容被安全過濾器阻擋');
+            return null;
+        }
+
+        const amuletText = result.candidates[0].content.parts[0].text;
+        console.log('📿 多圖佛牌文案生成成功，字數:', amuletText.length);
+
+        return amuletText;
+
+    } catch (error) {
+        if (error.message === 'QUOTA_EXCEEDED') throw error;
+        console.error('❌ 多圖佛牌辨識錯誤:', error);
+        return null;
+    }
+}
+
 // === Quick Reply 按鈕定義 ===
 const QUICK_REPLY_ITEMS = {
     items: [
@@ -705,21 +985,22 @@ async function handleTextMessage(event) {
             return;
         }
 
-        // 佛牌文案模式（點擊後下一張圖片會辨識佛牌）
+        // 佛牌文案模式（多圖收集模式）
         if (['佛牌', 'พระ', 'พระเครื่อง'].includes(text)) {
             const userId = event.source.userId || 'unknown';
-            userModeMap.set(userId, { mode: 'amulet', description: '' });
+            userModeMap.set(userId, { mode: 'amulet', description: '', images: [] });
             await replyToLine(replyToken,
-                '📿 佛牌聖物文案模式\n\n' +
-                '① 先傳文字（可選）\n' +
+                '📿 佛牌聖物文案模式（多圖支援）\n\n' +
+                '① 傳文字描述（可選）\n' +
                 '→ 師父名稱、佛牌名、功效\n\n' +
-                '② 再傳佛牌照片\n' +
-                '→ AI 合併資訊生成文案\n\n' +
+                '② 傳 1~5 張照片\n' +
+                '→ 正面/背面/細節都可以\n\n' +
+                '③ 輸入「完成」生成文案\n' +
+                '→ AI 綜合所有圖片資訊\n\n' +
                 '① พิมพ์ข้อมูล (ถ้ามี)\n' +
-                '→ ชื่ออาจารย์ ชื่อพระ พุทธคุณ\n\n' +
-                '② ส่งรูปพระ\n\n' +
-                '💡 輸入「取消」可退出\n' +
-                '💡 พิมพ์ "ยกเลิก" เพื่อออก');
+                '② ส่งรูป 1-5 ภาพ\n' +
+                '③ พิมพ์ "เสร็จ" เพื่อสร้าง\n\n' +
+                '💡「取消」退出 /「ยกเลิก」ออก');
             return;
         }
 
@@ -739,16 +1020,46 @@ async function handleTextMessage(event) {
             return;
         }
 
-        // 取消佛牌模式
+        // 取消模式
         if (['取消', 'ยกเลิก', 'cancel'].includes(text.toLowerCase())) {
             const userId = event.source.userId || 'unknown';
             if (userModeMap.has(userId)) {
+                const state = userModeMap.get(userId);
+                const imageCount = state.images?.length || 0;
                 userModeMap.delete(userId);
                 await replyToLine(replyToken,
-                    '✅ 已取消佛牌模式\n' +
-                    '✅ ยกเลิกโหมดพระแล้ว\n\n' +
+                    `✅ 已取消模式${imageCount > 0 ? `（已清除 ${imageCount} 張圖片）` : ''}\n` +
+                    '✅ ยกเลิกโหมดแล้ว\n\n' +
                     '請點選下方按鈕繼續使用\n' +
                     'กดปุ่มด้านล่างเพื่อใช้งานต่อ');
+                return;
+            }
+        }
+
+        // 完成指令（佛牌多圖模式）
+        if (['完成', 'เสร็จ', 'done', '生成'].includes(text.toLowerCase())) {
+            const userId = event.source.userId || 'unknown';
+            const userState = userModeMap.get(userId);
+            if (userState && userState.mode === 'amulet') {
+                await processMultiImageAmulet(event, userId, userState);
+                return;
+            }
+        }
+
+        // 清除指令（重新開始收集圖片）
+        if (['清除', 'ล้าง', 'clear', '重來'].includes(text.toLowerCase())) {
+            const userId = event.source.userId || 'unknown';
+            const userState = userModeMap.get(userId);
+            if (userState && userState.mode === 'amulet') {
+                const oldCount = userState.images?.length || 0;
+                userState.images = [];
+                userState.description = '';
+                userModeMap.set(userId, userState);
+                await replyToLine(replyToken,
+                    `🗑️ 已清除 ${oldCount} 張圖片\n` +
+                    '可重新開始傳圖\n\n' +
+                    `🗑️ ล้าง ${oldCount} รูปแล้ว\n` +
+                    'ส่งรูปใหม่ได้เลย');
                 return;
             }
         }
