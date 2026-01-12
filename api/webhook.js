@@ -33,6 +33,27 @@ const CONFIG = {
     MAX_LINE_MESSAGE_LENGTH: 4500  // LINE 限制 5000，保留 buffer
 };
 
+// === 智慧模型選擇 ===
+function selectModel(task, context = {}) {
+    const { duration = 0, hasUserInfo = false } = context;
+
+    switch (task) {
+        case 'audio':
+            // 語音 > 60秒用 Pro
+            return duration > 60000 ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+        case 'fortune':
+            // 命理語音 > 3分鐘用 Pro
+            return duration > 180000 ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+        case 'amulet':
+            // 有用戶資訊用 Flash，沒有用 Pro（需要更多推測）
+            return hasUserInfo ? 'gemini-2.5-flash' : 'gemini-2.5-pro';
+        case 'receipt':
+        case 'parse':
+        default:
+            return 'gemini-2.5-flash';
+    }
+}
+
 // === 用戶模式追蹤（in-memory，Vercel 可能重啟會清空）===
 // 格式: userId -> { mode: 'receipt' | 'amulet' | 'fortune', description: '暂存的文字描述' }
 const userModeMap = new Map();
@@ -277,8 +298,8 @@ async function handleFortuneAudioMessage(event) {
 
         console.log(`✅ 命理語音識別成功，字數: ${recognizedText.length}`);
 
-        // 使用命理老師提示詞進行翻譯
-        const fortuneText = await translateFortuneText(recognizedText);
+        // 使用命理老師提示詞進行翻譯（根據語音長度選擇模型）
+        const fortuneText = await translateFortuneText(recognizedText, duration);
 
         if (!fortuneText) {
             await replyToLine(replyToken,
@@ -309,7 +330,7 @@ async function handleFortuneAudioMessage(event) {
 }
 
 // === Gemini 命理翻譯（台灣命理老師口吻）===
-async function translateFortuneText(text) {
+async function translateFortuneText(text, duration = 0) {
     const prompt = `【角色設定】
 
 你是一位資深的台灣命理老師，長年從事一對一諮詢。說話風格親切穩重、不誇大、不渲染，語氣自然真誠，就像坐在緣主對面慢慢解說。你的重點是把話說清楚、說到心裡，而不是使用術語或理論名詞。
@@ -389,8 +410,10 @@ async function translateFortuneText(text) {
 【素材內容】
 ${text}`;
 
-    // 使用 Gemini 2.5 Flash
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_FORTUNE}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 智慧選擇模型：> 3分鐘用 Pro
+    const model = selectModel('fortune', { duration });
+    console.log(`🔮 命理翻譯使用模型: ${model} (語音長度: ${(duration / 1000 / 60).toFixed(1)}分鐘)`);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -530,8 +553,11 @@ ${userInfoSection}
 ❌ 避免保證靈驗、必定成功等誇大詞彙
 ❌ 不虛構不存在的師父或寺廟`;
 
-    // 使用 Gemini 2.5 Flash
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_AMULET}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 智慧選擇模型：有用戶資訊用 Flash，否則用 Pro
+    const hasUserInfo = userDescription && userDescription.trim().length > 0;
+    const model = selectModel('amulet', { hasUserInfo });
+    console.log(`📿 佛牌文案使用模型: ${model} (有用戶資訊: ${hasUserInfo})`);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -731,15 +757,11 @@ async function handleTextMessage(event) {
         const userId = event.source.userId || 'unknown';
         const userState = userModeMap.get(userId);
         if (userState && userState.mode === 'amulet') {
-            // 暫存用戶提供的文字描述
+            // 靜默暫存用戶提供的文字描述（不回覆，省 LINE 訊息次數）
             userState.description = (userState.description ? userState.description + '\n' : '') + text;
             userModeMap.set(userId, userState);
-            await replyToLine(replyToken,
-                '✅ 已收到資訊 / รับข้อมูลแล้ว\n\n' +
-                `📝 ${text}\n\n` +
-                '💡 可繼續補充或直接傳照片！\n' +
-                '💡 พิมพ์เพิ่มหรือส่งรูปได้เลย!\n\n' +
-                '📷 等待照片中... / รอรูปอยู่...');
+            console.log(`� 佛牌模式靜默暫存: ${text}`);
+            // 不回覆，等圖片一起處理
             return;
         }
 
