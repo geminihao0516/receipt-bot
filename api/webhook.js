@@ -65,6 +65,33 @@ const userModeMap = new Map();
 // === 多圖設定 ===
 const MAX_AMULET_IMAGES = 5;  // 最多收集 5 張圖片
 
+// === 通用錯誤處理 ===
+async function handleApiError(replyToken, error, context = 'image') {
+    console.error(`❌ API 錯誤 (${context}):`, error.message || error);
+
+    const errorMessages = {
+        'QUOTA_EXCEEDED': {
+            zh: '❌ 免費額度已滿，請稍後再試',
+            th: '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ'
+        },
+        'IMAGE_TOO_LARGE': {
+            zh: '❌ 圖片檔案過大 (>4MB)\n請壓縮後重新上傳',
+            th: '❌ ไฟล์ใหญ่เกินไป (>4MB)\nกรุณาบีบอัดแล้วส่งใหม่'
+        },
+        'AUDIO_TOO_LARGE': {
+            zh: '❌ 語音檔案太大',
+            th: '❌ ไฟล์เสียงใหญ่เกินไป'
+        },
+        'default': {
+            zh: '❌ 系統錯誤，請稍後再試',
+            th: '❌ ผิดพลาด ลองใหม่ภายหลัง'
+        }
+    };
+
+    const msg = errorMessages[error.message] || errorMessages['default'];
+    await replyToLine(replyToken, `${msg.zh}\n${msg.th}`);
+}
+
 module.exports = async (req, res) => {
     // GET 請求：驗證用
     if (req.method === 'GET') {
@@ -186,89 +213,11 @@ async function handleImageMessage(event) {
         await appendToSheet(receiptData);
 
     } catch (error) {
-        console.error('handleImageMessage error:', error);
-
-        // 處理特定錯誤類型
-        if (error.message === 'QUOTA_EXCEEDED') {
-            await replyToLine(event.replyToken,
-                '❌ 免費額度已滿，請稍後再試\n' +
-                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ\n\n' +
-                '💡 或手動輸入：師傅 品項 數量 單價\n' +
-                '💡 หรือพิมพ์เอง: อาจารย์ ของ จำนวน ราคา'
-            );
-        } else if (error.message === 'IMAGE_TOO_LARGE') {
-            await replyToLine(event.replyToken,
-                '❌ 圖片檔案過大 (>4MB)\n' +
-                '請壓縮後重新上傳\n\n' +
-                '❌ ไฟล์ใหญ่เกินไป (>4MB)\n' +
-                'กรุณาบีบอัดแล้วส่งใหม่'
-            );
-        } else {
-            await replyToLine(event.replyToken,
-                '❌ 系統錯誤，請稍後再試\n' +
-                '❌ ผิดพลาด ลองใหม่ภายหลัง'
-            );
-        }
+        await handleApiError(event.replyToken, error, 'receipt');
     }
 }
 
-// === 處理佛牌聖物圖片訊息 ===
-async function handleAmuletImageMessage(event, userDescription = '') {
-    try {
-        const messageId = event.message.id;
-        const replyToken = event.replyToken;
 
-        // 從 Line 下載圖片
-        const imageData = await getImageFromLine(messageId);
-
-        console.log('📿 佛牌辨識，用戶描述:', userDescription || '(無)');
-
-        // Gemini 辨識佛牌並生成文案（傳入用戶提供的描述）
-        const amuletText = await recognizeAmulet(imageData, userDescription);
-
-        if (!amuletText) {
-            await replyToLine(replyToken,
-                '❌ 無法辨識此圖片，請確認：\n' +
-                '1. 是否為佛牌/聖物照片\n' +
-                '2. 照片是否清晰\n' +
-                '3. 光線是否充足\n\n' +
-                '❌ อ่านไม่ได้ กรุณาตรวจสอบ:\n' +
-                '1. เป็นรูปพระหรือไม่\n' +
-                '2. รูปชัดหรือไม่\n' +
-                '3. แสงเพียงพอหรือไม่\n\n' +
-                '💡 可附上師父名稱/佛牌名重新傳送\n' +
-                '💡 ส่งพร้อมชื่ออาจารย์/ชื่อพระได้'
-            );
-            return;
-        }
-
-        // 成功辨識，回傳文案（可能很長需要分段）
-        const userId = event.source.userId || null;
-        await replyToLine(replyToken, amuletText, userId);
-
-    } catch (error) {
-        console.error('handleAmuletImageMessage error:', error);
-
-        if (error.message === 'QUOTA_EXCEEDED') {
-            await replyToLine(event.replyToken,
-                '❌ 免費額度已滿，請稍後再試\n' +
-                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ'
-            );
-        } else if (error.message === 'IMAGE_TOO_LARGE') {
-            await replyToLine(event.replyToken,
-                '❌ 圖片檔案過大 (>4MB)\n' +
-                '請壓縮後重新上傳\n\n' +
-                '❌ ไฟล์ใหญ่เกินไป (>4MB)\n' +
-                'กรุณาบีบอัดแล้วส่งใหม่'
-            );
-        } else {
-            await replyToLine(event.replyToken,
-                '❌ 系統錯誤，請稍後再試\n' +
-                '❌ ผิดพลาด ลองใหม่ภายหลัง'
-            );
-        }
-    }
-}
 
 // === 收集佛牌圖片（多圖模式）===
 async function collectAmuletImage(event, userId, userState) {
@@ -1183,8 +1132,16 @@ async function handleAudioMessage(event) {
 
         console.log(`✅ 語音識別成功: ${recognizedText}`);
 
-        // 使用現有的文字解析流程
-        const data = await parseTextWithGemini(recognizedText);
+        // 先嘗試本地解析（節省 API 調用）
+        let data = parseTextLocally(recognizedText);
+
+        // 本地解析失敗才用 Gemini API
+        if (!data) {
+            console.log('📝 語音內容本地解析失敗，使用 Gemini API');
+            data = await parseTextWithGemini(recognizedText);
+        } else {
+            console.log('✅ 語音內容本地解析成功，節省 API 調用');
+        }
 
         if (data && data.items && data.items.length > 0) {
             const summary = formatSummary(data);
@@ -1207,23 +1164,7 @@ async function handleAudioMessage(event) {
         }
 
     } catch (error) {
-        console.error('handleAudioMessage error:', error);
-        if (error.message === 'QUOTA_EXCEEDED') {
-            await replyToLine(event.replyToken,
-                '❌ 免費額度已滿，請稍後再試\n' +
-                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ'
-            );
-        } else if (error.message === 'AUDIO_TOO_LARGE') {
-            await replyToLine(event.replyToken,
-                '❌ 語音檔案太大\n' +
-                '❌ ไฟล์เสียงใหญ่เกินไป'
-            );
-        } else {
-            await replyToLine(event.replyToken,
-                '❌ 語音識別失敗，請重試\n' +
-                '❌ ฟังไม่ได้ ลองใหม่นะ'
-            );
-        }
+        await handleApiError(event.replyToken, error, 'audio');
     }
 }
 
