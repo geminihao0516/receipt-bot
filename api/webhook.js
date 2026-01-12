@@ -278,8 +278,8 @@ async function handleFortuneAudioMessage(event) {
         // 從 Line 下載語音
         const audioData = await getAudioFromLine(messageId);
 
-        // Gemini 語音識別
-        const recognizedText = await recognizeAudio(audioData);
+        // Gemini 語音識別（根據語音長度選擇模型）
+        const recognizedText = await recognizeAudio(audioData, duration);
 
         if (!recognizedText || recognizedText.trim() === '') {
             await replyToLine(replyToken,
