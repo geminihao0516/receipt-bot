@@ -757,11 +757,14 @@ async function handleTextMessage(event) {
         const userId = event.source.userId || 'unknown';
         const userState = userModeMap.get(userId);
         if (userState && userState.mode === 'amulet') {
-            // 靜默暫存用戶提供的文字描述（不回覆，省 LINE 訊息次數）
+            // 暫存用戶提供的文字描述
             userState.description = (userState.description ? userState.description + '\n' : '') + text;
             userModeMap.set(userId, userState);
-            console.log(`� 佛牌模式靜默暫存: ${text}`);
-            // 不回覆，等圖片一起處理
+            console.log(`📿 佛牌模式暫存: ${text}`);
+            // 簡短確認，讓用戶知道系統有收到
+            await replyToLine(replyToken,
+                `📝 已收到：${text}\n\n` +
+                '請傳照片 / ส่งรูปได้เลย 📷');
             return;
         }
 
