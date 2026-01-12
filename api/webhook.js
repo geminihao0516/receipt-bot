@@ -234,11 +234,10 @@ async function collectAmuletImage(event, userId, userState) {
         if (userState.images.length >= MAX_AMULET_IMAGES) {
             await replyToLine(replyToken,
                 `⚠️ 已達 ${MAX_AMULET_IMAGES} 張上限\n` +
-                '輸入「完成」生成文案\n' +
-                '輸入「清除」重新開始\n\n' +
+                '點下方按鈕選擇下一步\n\n' +
                 `⚠️ ครบ ${MAX_AMULET_IMAGES} รูปแล้ว\n` +
-                'พิมพ์ "เสร็จ" เพื่อสร้าง\n' +
-                'พิมพ์ "ล้าง" เพื่อเริ่มใหม่'
+                'กดปุ่มด้านล่างเลย',
+                null, 'amulet'
             );
             return;
         }
@@ -263,17 +262,18 @@ async function collectAmuletImage(event, userId, userState) {
             (count < MAX_AMULET_IMAGES
                 ? `可繼續傳圖（最多 ${MAX_AMULET_IMAGES} 張）\n`
                 : `已達上限\n`) +
-            '\n輸入「完成」→ 生成文案\n' +
-            '輸入「取消」→ 退出模式\n\n' +
+            '\n點下方按鈕選擇下一步 👇\n\n' +
             `📷 รับรูปที่ ${count} แล้ว\n` +
-            `พิมพ์ "เสร็จ" → สร้างบทความ`
+            `กดปุ่มด้านล่างเลย`,
+            null, 'amulet'
         );
 
     } catch (error) {
         console.error('collectAmuletImage error:', error);
         await replyToLine(event.replyToken,
             '❌ 圖片處理失敗，請重傳\n' +
-            '❌ รูปผิดพลาด ส่งใหม่นะ'
+            '❌ รูปผิดพลาด ส่งใหม่นะ',
+            null, 'amulet'
         );
     }
 }
@@ -290,7 +290,8 @@ async function processMultiImageAmulet(event, userId, userState) {
                 '⚠️ 還沒有圖片！\n' +
                 '請先傳佛牌照片\n\n' +
                 '⚠️ ยังไม่มีรูป!\n' +
-                'ส่งรูปพระก่อนนะ'
+                'ส่งรูปพระก่อนนะ',
+                null, 'amulet'
             );
             return;
         }
@@ -303,7 +304,8 @@ async function processMultiImageAmulet(event, userId, userState) {
         if (!amuletText) {
             await replyToLine(replyToken,
                 '❌ 無法辨識，請確認圖片清晰\n' +
-                '❌ อ่านไม่ได้ รูปชัดไหม'
+                '❌ อ่านไม่ได้ รูปชัดไหม',
+                null, 'amulet'
             );
             // 不清除狀態，讓用戶可以重試或補傳
             return;
@@ -321,12 +323,14 @@ async function processMultiImageAmulet(event, userId, userState) {
         if (error.message === 'QUOTA_EXCEEDED') {
             await replyToLine(event.replyToken,
                 '❌ API 額度已滿，請稍後再試\n' +
-                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลัง'
+                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลัง',
+                null, 'amulet'
             );
         } else {
             await replyToLine(event.replyToken,
                 '❌ 處理失敗，請重試\n' +
-                '❌ ผิดพลาด ลองใหม่นะ'
+                '❌ ผิดพลาด ลองใหม่นะ',
+                null, 'amulet'
             );
         }
     }
@@ -892,6 +896,64 @@ const QUICK_REPLY_ITEMS = {
     ]
 };
 
+// === 佛牌模式專用 Quick Reply（中泰雙語口語化）===
+const AMULET_QUICK_REPLY = {
+    items: [
+        {
+            type: 'action',
+            action: {
+                type: 'camera',
+                label: '📷 拍照 / ถ่ายรูป'
+            }
+        },
+        {
+            type: 'action',
+            action: {
+                type: 'cameraRoll',
+                label: '🖼️ 相簿 / อัลบั้ม'
+            }
+        },
+        {
+            type: 'action',
+            action: {
+                type: 'message',
+                label: '✅ 完成生成 / เสร็จสร้าง',
+                text: '完成'
+            }
+        },
+        {
+            type: 'action',
+            action: {
+                type: 'message',
+                label: '🗑️ 清除重來 / ล้างใหม่',
+                text: '清除'
+            }
+        },
+        {
+            type: 'action',
+            action: {
+                type: 'message',
+                label: '❌ 取消離開 / ยกเลิก',
+                text: '取消'
+            }
+        }
+    ]
+};
+
+// === 命理模式專用 Quick Reply（中泰雙語口語化）===
+const FORTUNE_QUICK_REPLY = {
+    items: [
+        {
+            type: 'action',
+            action: {
+                type: 'message',
+                label: '❌ 取消離開 / ยกเลิก',
+                text: '取消'
+            }
+        }
+    ]
+};
+
 // === 處理文字訊息 ===
 async function handleTextMessage(event) {
     try {
@@ -939,17 +1001,17 @@ async function handleTextMessage(event) {
             const userId = event.source.userId || 'unknown';
             userModeMap.set(userId, { mode: 'amulet', description: '', images: [] });
             await replyToLine(replyToken,
-                '📿 佛牌聖物文案模式（多圖支援）\n\n' +
-                '① 傳文字描述（可選）\n' +
-                '→ 師父名稱、佛牌名、功效\n\n' +
-                '② 傳 1~5 張照片\n' +
-                '→ 正面/背面/細節都可以\n\n' +
-                '③ 輸入「完成」生成文案\n' +
-                '→ AI 綜合所有圖片資訊\n\n' +
-                '① พิมพ์ข้อมูล (ถ้ามี)\n' +
-                '② ส่งรูป 1-5 ภาพ\n' +
-                '③ พิมพ์ "เสร็จ" เพื่อสร้าง\n\n' +
-                '💡「取消」退出 /「ยกเลิก」ออก');
+                '📿 佛牌聖物文案模式\n\n' +
+                '➀ 可先傳文字描述（選填）\n' +
+                '→ 師父、佛牌名、功效\n\n' +
+                '➁ 傳 1~5 張照片\n' +
+                '→ 正面/背面/細節\n\n' +
+                '➂ 點「完成生成」\n' +
+                '→ AI 綜合生成文案\n\n' +
+                '📿 โหมดพระ\n' +
+                'ส่งรูป 1-5 ภาพ แล้วกดปุ่ม 👇',
+                null, 'amulet'
+            );
             return;
         }
 
@@ -959,13 +1021,15 @@ async function handleTextMessage(event) {
             userModeMap.set(userId, { mode: 'fortune', description: '' });
             await replyToLine(replyToken,
                 '🔮 語音翻譯模式\n\n' +
-                '請上傳命理語音檔案（m4a）\n' +
+                '請上傳命理語音檔案\n' +
                 'AI 會將內容轉化為台灣命理老師解說文\n\n' +
                 '🔮 โหมดแปลเสียง\n\n' +
-                'อัปโหลดไฟล์เสียงโหราศาสตร์ (m4a)\n' +
-                'AI จะแปลเป็นคำอธิบายของครูโหราศาสตร์\n\n' +
-                '💡 輸入「取消」可退出\n' +
-                '💡 พิมพ์ "ยกเลิก" เพื่อออก');
+                'อัปโหลดไฟล์เสียงโหราศาสตร์\n' +
+                'AI จะแปลเป็นคำอธิบาย\n\n' +
+                '� 點按鈕取消可離開\n' +
+                '� กดปุ่มยกเลิกได้',
+                null, 'fortune'
+            );
             return;
         }
 
@@ -1008,7 +1072,9 @@ async function handleTextMessage(event) {
                     `🗑️ 已清除 ${oldCount} 張圖片\n` +
                     '可重新開始傳圖\n\n' +
                     `🗑️ ล้าง ${oldCount} รูปแล้ว\n` +
-                    'ส่งรูปใหม่ได้เลย');
+                    'ส่งรูปใหม่ได้เลย',
+                    null, 'amulet'
+                );
                 return;
             }
         }
@@ -1024,7 +1090,9 @@ async function handleTextMessage(event) {
             // 簡短確認，讓用戶知道系統有收到
             await replyToLine(replyToken,
                 `📝 已收到：${text}\n\n` +
-                '請傳照片 / ส่งรูปได้เลย 📷');
+                '請傳照片 / ส่งรูปได้เลย 📷',
+                null, 'amulet'
+            );
             return;
         }
 
@@ -1678,7 +1746,8 @@ function formatSummary(data) {
 }
 
 // === 回覆 Line ===
-async function replyToLine(replyToken, message, userId = null) {
+// quickReplyType: 'default' | 'amulet' | 'fortune' | null (不顯示按鈕)
+async function replyToLine(replyToken, message, userId = null, quickReplyType = 'default') {
     const MAX_LENGTH = CONFIG.MAX_LINE_MESSAGE_LENGTH;
 
     console.log('正在回覆:', replyToken.substring(0, 20) + '...', `訊息長度: ${message.length} 字`);
@@ -1689,17 +1758,18 @@ async function replyToLine(replyToken, message, userId = null) {
         const segments = splitMessage(message, MAX_LENGTH);
 
         // 第一段用 reply API
-        await sendReply(replyToken, segments[0], true);
+        await sendReply(replyToken, segments[0], quickReplyType);
 
         // 後續段落用 push API（需要 userId）
         if (segments.length > 1 && userId) {
             for (let i = 1; i < segments.length; i++) {
                 const isLast = (i === segments.length - 1);
-                await sendPush(userId, segments[i], isLast);
+                // 只有最後一段顯示按鈕
+                await sendPush(userId, segments[i], isLast ? quickReplyType : null);
             }
         }
     } else {
-        await sendReply(replyToken, message, true);
+        await sendReply(replyToken, message, quickReplyType);
     }
 }
 
@@ -1729,16 +1799,32 @@ function splitMessage(message, maxLength) {
     return segments;
 }
 
+// === 根據類型取得對應的 Quick Reply 物件 ===
+function getQuickReply(quickReplyType) {
+    switch (quickReplyType) {
+        case 'amulet':
+            return AMULET_QUICK_REPLY;
+        case 'fortune':
+            return FORTUNE_QUICK_REPLY;
+        case 'default':
+            return QUICK_REPLY_ITEMS;
+        default:
+            return null;
+    }
+}
+
 // === Reply API（使用 replyToken）===
-async function sendReply(replyToken, message, includeQuickReply = false) {
+// quickReplyType: 'default' | 'amulet' | 'fortune' | null
+async function sendReply(replyToken, message, quickReplyType = 'default') {
     const url = 'https://api.line.me/v2/bot/message/reply';
 
     const messageObj = {
         type: 'text',
         text: message
     };
-    if (includeQuickReply) {
-        messageObj.quickReply = QUICK_REPLY_ITEMS;
+    const quickReplyObj = getQuickReply(quickReplyType);
+    if (quickReplyObj) {
+        messageObj.quickReply = quickReplyObj;
     }
 
     try {
@@ -1766,15 +1852,17 @@ async function sendReply(replyToken, message, includeQuickReply = false) {
 }
 
 // === Push API（主動發送，不需 replyToken）===
-async function sendPush(userId, message, includeQuickReply = false) {
+// quickReplyType: 'default' | 'amulet' | 'fortune' | null
+async function sendPush(userId, message, quickReplyType = 'default') {
     const url = 'https://api.line.me/v2/bot/message/push';
 
     const messageObj = {
         type: 'text',
         text: message
     };
-    if (includeQuickReply) {
-        messageObj.quickReply = QUICK_REPLY_ITEMS;
+    const quickReplyObj = getQuickReply(quickReplyType);
+    if (quickReplyObj) {
+        messageObj.quickReply = quickReplyObj;
     }
 
     try {
