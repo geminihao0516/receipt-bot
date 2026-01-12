@@ -848,8 +848,8 @@ async function handleAudioMessage(event) {
         // 從 Line 下載語音
         const audioData = await getAudioFromLine(messageId);
 
-        // Gemini 語音識別（支援中文+泰文）
-        const recognizedText = await recognizeAudio(audioData);
+        // Gemini 語音識別（支援中文+泰文，根據語音長度選擇模型）
+        const recognizedText = await recognizeAudio(audioData, duration);
 
         if (!recognizedText || recognizedText.trim() === '') {
             await replyToLine(replyToken,
@@ -1131,7 +1131,7 @@ async function getAudioFromLine(messageId) {
 }
 
 // === Gemini 語音識別（支援中文+泰文）===
-async function recognizeAudio(audioData) {
+async function recognizeAudio(audioData, duration = 0) {
     const { buffer: audioBuffer, mimeType } = audioData;
     const base64Audio = audioBuffer.toString('base64');
 
@@ -1146,8 +1146,10 @@ async function recognizeAudio(audioData) {
 
 只回傳轉錄的文字，不要有其他說明。`;
 
-    // 使用 Gemini 2.5 Flash
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_AUDIO}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    // 智慧選擇模型：> 60秒用 Pro
+    const model = selectModel('audio', { duration });
+    console.log(`🎙️ 語音識別使用模型: ${model} (語音長度: ${(duration / 1000).toFixed(1)}秒)`);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
