@@ -12,7 +12,13 @@ const CONFIG = {
 
     // === Gemini API ===
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-    GEMINI_MODEL: 'gemini-2.5-flash',  // 目前使用的模型
+
+    // === Gemini 模型設定（不同功能可用不同模型）===
+    GEMINI_MODEL_RECEIPT: process.env.GEMINI_MODEL_RECEIPT || 'gemini-2.5-flash',   // 收據辨識
+    GEMINI_MODEL_AUDIO: process.env.GEMINI_MODEL_AUDIO || 'gemini-2.5-flash',       // 語音辨識
+    GEMINI_MODEL_AMULET: process.env.GEMINI_MODEL_AMULET || 'gemini-2.5-flash',     // 佛牌文案
+    GEMINI_MODEL_FORTUNE: process.env.GEMINI_MODEL_FORTUNE || 'gemini-2.5-flash',   // 命理翻譯
+    GEMINI_MODEL_PARSE: process.env.GEMINI_MODEL_PARSE || 'gemini-2.5-flash',       // 文字解析
 
     // === Google Sheets ===
     SPREADSHEET_ID: process.env.SPREADSHEET_ID,
@@ -384,7 +390,7 @@ async function translateFortuneText(text) {
 ${text}`;
 
     // 使用 Gemini 2.5 Flash
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_FORTUNE}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -525,7 +531,7 @@ ${userInfoSection}
 ❌ 不虛構不存在的師父或寺廟`;
 
     // 使用 Gemini 2.5 Flash
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_AMULET}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -645,11 +651,13 @@ async function handleTextMessage(event) {
                 '📖 使用說明 / คู่มือ\n\n' +
                 '📷 拍照記帳 → 拍收據 AI 辨識\n' +
                 '📿 佛牌文案 → 拍佛牌 AI 寫文案\n' +
-                '🎙️ 語音記帳 → 說話即可記帳\n' +
+                '🎙️ 語音記帳 → 錄語音 AI 辨識後記帳\n' +
+                '🔮 語音翻譯 → 命理語音翻成中文解說\n' +
                 '✏️ 文字記帳 → 師傅 品項 數量 單價\n\n' +
                 '📷 ถ่ายรูปใบเสร็จ → AI อ่านให้\n' +
                 '📿 ถ่ายรูปพระ → AI เขียนบทความ\n' +
-                '🎙️ พูด → บันทึกบัญชี\n' +
+                '🎙️ อัดเสียง → AI ฟังแล้วบันทึก\n' +
+                '🔮 แปลเสียง → แปลโหราศาสตร์เป็นจีน\n' +
                 '✏️ พิมพ์ → อาจารย์ ของ จำนวน ราคา\n\n' +
                 '👇 點按鈕開始 / กดปุ่มเลย');
             return;
@@ -998,7 +1006,7 @@ async function parseTextWithGemini(text) {
 }
 沒數量填1，沒單價用總額。只回純 JSON，不要 markdown。`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_PARSE}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -1117,7 +1125,7 @@ async function recognizeAudio(audioData) {
 只回傳轉錄的文字，不要有其他說明。`;
 
     // 使用 Gemini 2.5 Flash
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_AUDIO}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     try {
         const response = await fetch(url, {
@@ -1226,7 +1234,7 @@ JSON格式（盡量簡潔）：
 - 品項名稱不要超過20字
 - 日期如果看不清楚，填空字串""，不要隨便猜！`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_RECEIPT}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
     const response = await fetch(url, {
         method: 'POST',
