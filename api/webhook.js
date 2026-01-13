@@ -133,6 +133,33 @@ module.exports = async (req, res) => {
                     } else {
                         await handleAudioMessage(event);
                     }
+                } else if (event.message.type === 'file') {
+                    // 處理上傳的檔案（包括 m4a 語音檔）
+                    const fileName = event.message.fileName || '';
+                    const userState = userModeMap.get(userId) || { mode: 'receipt' };
+
+                    // 檢查是否為音訊檔案
+                    if (fileName.toLowerCase().endsWith('.m4a') ||
+                        fileName.toLowerCase().endsWith('.mp3') ||
+                        fileName.toLowerCase().endsWith('.wav') ||
+                        fileName.toLowerCase().endsWith('.ogg')) {
+                        if (userState.mode === 'fortune') {
+                            await handleFortuneFileMessage(event);
+                            userModeMap.delete(userId);
+                        } else {
+                            await handleAudioFileMessage(event);
+                        }
+                    } else {
+                        // 不支援的檔案類型
+                        await replyToLine(event.replyToken,
+                            '⚠️ 不支援此檔案格式\n' +
+                            '請直接使用 LINE 內建錄音功能\n' +
+                            '或上傳 m4a/mp3 音訊檔\n\n' +
+                            '⚠️ ไม่รองรับไฟล์นี้\n' +
+                            'กรุณาใช้การอัดเสียงในแอป LINE\n' +
+                            'หรืออัปโหลดไฟล์ m4a/mp3'
+                        );
+                    }
                 }
             } catch (error) {
                 console.error('處理事件錯誤:', error);
@@ -409,6 +436,131 @@ async function handleFortuneAudioMessage(event) {
                 null, 'fortune'
             );
         }
+    }
+}
+
+// === 處理上傳的命理音訊檔案（m4a/mp3等）===
+async function handleFortuneFileMessage(event) {
+    try {
+        const messageId = event.message.id;
+        const replyToken = event.replyToken;
+        const fileName = event.message.fileName || 'audio.m4a';
+
+        console.log(`收到命理音訊檔案: ${messageId}, 檔名: ${fileName}`);
+
+        // 從 Line 下載檔案
+        const audioData = await getAudioFromLine(messageId);
+
+        // 估算語音長度（無法從檔案直接取得，用檔案大小估算）
+        const estimatedDuration = Math.max(60000, audioData.buffer.length / 16); // 粗估
+
+        // Gemini 語音識別
+        const recognizedText = await recognizeAudio(audioData, estimatedDuration);
+
+        if (!recognizedText || recognizedText.trim() === '') {
+            await replyToLine(replyToken,
+                '❌ 無法識別語音，請確認檔案格式正確\n' +
+                '支援格式：m4a, mp3, wav, ogg\n\n' +
+                '❌ ฟังไม่ออก กรุณาตรวจสอบไฟล์\n' +
+                'รองรับ: m4a, mp3, wav, ogg',
+                null, 'fortune'
+            );
+            return;
+        }
+
+        console.log(`✅ 命理檔案語音識別成功，字數: ${recognizedText.length}`);
+
+        // 使用命理老師提示詞進行翻譯
+        const fortuneText = await translateFortuneText(recognizedText, estimatedDuration);
+
+        if (!fortuneText) {
+            await replyToLine(replyToken,
+                '❌ 翻譯處理失敗，請稍後再試\n' +
+                '❌ แปลไม่ได้ ลองใหม่ทีหลัง',
+                null, 'fortune'
+            );
+            return;
+        }
+
+        // 回傳翻譯結果
+        await replyToLine(replyToken, fortuneText);
+
+    } catch (error) {
+        console.error('handleFortuneFileMessage error:', error);
+        if (error.message === 'QUOTA_EXCEEDED') {
+            await replyToLine(event.replyToken,
+                '❌ 免費額度已滿，請稍後再試\n' +
+                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ',
+                null, 'fortune'
+            );
+        } else {
+            await replyToLine(event.replyToken,
+                '❌ 處理失敗，請重試\n' +
+                '❌ ผิดพลาด ลองใหม่นะ',
+                null, 'fortune'
+            );
+        }
+    }
+}
+
+// === 處理上傳的一般音訊檔案（用於語音記帳）===
+async function handleAudioFileMessage(event) {
+    try {
+        const messageId = event.message.id;
+        const replyToken = event.replyToken;
+        const fileName = event.message.fileName || 'audio.m4a';
+
+        console.log(`收到音訊檔案: ${messageId}, 檔名: ${fileName}`);
+
+        // 從 Line 下載檔案
+        const audioData = await getAudioFromLine(messageId);
+
+        // 估算語音長度
+        const estimatedDuration = Math.max(30000, audioData.buffer.length / 16);
+
+        // Gemini 語音識別
+        const recognizedText = await recognizeAudio(audioData, estimatedDuration);
+
+        if (!recognizedText || recognizedText.trim() === '') {
+            await replyToLine(replyToken,
+                '❌ 無法識別語音，請重新錄製\n' +
+                '建議使用 LINE 內建錄音功能\n\n' +
+                '❌ ฟังไม่ชัด ลองใหม่\n' +
+                'แนะนำให้อัดเสียงในแอป LINE'
+            );
+            return;
+        }
+
+        console.log(`✅ 檔案語音識別成功: ${recognizedText}`);
+
+        // 先嘗試本地解析
+        let data = parseTextLocally(recognizedText);
+
+        if (!data) {
+            console.log('📝 語音內容本地解析失敗，使用 Gemini API');
+            data = await parseTextWithGemini(recognizedText);
+        }
+
+        if (data && data.items && data.items.length > 0) {
+            const summary = formatSummary(data);
+            await replyToLine(replyToken,
+                `🎤 語音識別結果：\n"${recognizedText}"\n\n` +
+                summary
+            );
+            await appendToSheet(data);
+        } else {
+            await replyToLine(replyToken,
+                `🎤 語音識別：\n"${recognizedText}"\n\n` +
+                '⚠️ 無法解析為記帳資料\n' +
+                '格式範例：師傅名 品項 數量 單價\n\n' +
+                '⚠️ ไม่ใช่ข้อมูลบัญชี\n' +
+                'ตัวอย่าง: อาจารย์ ของ จำนวน ราคา'
+            );
+        }
+
+    } catch (error) {
+        console.error('handleAudioFileMessage error:', error);
+        await handleApiError(event.replyToken, error, 'audio');
     }
 }
 
@@ -877,13 +1029,14 @@ async function handleTextMessage(event) {
             userModeMap.set(userId, { mode: 'fortune', description: '' });
             await replyToLine(replyToken,
                 '🔮 語音翻譯模式\n\n' +
-                '請上傳命理語音檔案\n' +
+                '請上傳命理語音檔案（m4a/mp3）\n' +
+                '或使用 LINE 內建錄音\n' +
                 'AI 會將內容轉化為台灣命理老師解說文\n\n' +
                 '🔮 โหมดแปลเสียง\n\n' +
-                'อัปโหลดไฟล์เสียงโหราศาสตร์\n' +
+                'อัปโหลดไฟล์เสียง (m4a/mp3)\n' +
+                'หรืออัดเสียงในแอป LINE\n' +
                 'AI จะแปลเป็นคำอธิบาย\n\n' +
-                '� 點按鈕取消可離開\n' +
-                '� กดปุ่มยกเลิกได้',
+                '👇 點按鈕可取消離開 / กดยกเลิกได้',
                 null, 'fortune'
             );
             return;
@@ -997,9 +1150,7 @@ async function handleTextMessage(event) {
                 'อาจารย์ รายการ จำนวน ราคา\n\n' +
                 'ตัวอย่าง:\n' +
                 '• หลวงปู่ทวด ทอง 10 500\n' +
-                '• อาจารย์นำบุญ ทองคำ 5 1000\n\n' +
-                '💡 或點擊「範例」查看更多格式\n' +
-                '💡 หรือกด "ตัวอย่าง" ดูเพิ่มเติม'
+                '• อาจารย์นำบุญ ทองคำ 5 1000'
             );
         }
 
