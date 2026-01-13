@@ -36,21 +36,24 @@ const CONFIG = {
 // === 智慧模型選擇 ===
 function selectModel(task, context = {}) {
     const { duration = 0, hasUserInfo = false } = context;
+    const PRO = 'gemini-2.5-pro';
 
     switch (task) {
         case 'audio':
             // 語音 > 60秒用 Pro
-            return duration > 60000 ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+            return duration > 60000 ? PRO : CONFIG.GEMINI_MODEL_AUDIO;
         case 'fortune':
             // 命理語音 > 3分鐘用 Pro
-            return duration > 180000 ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+            return duration > 180000 ? PRO : CONFIG.GEMINI_MODEL_FORTUNE;
         case 'amulet':
             // 有用戶資訊用 Flash，沒有用 Pro（需要更多推測）
-            return hasUserInfo ? 'gemini-2.5-flash' : 'gemini-2.5-pro';
+            return hasUserInfo ? CONFIG.GEMINI_MODEL_AMULET : PRO;
         case 'receipt':
+            return CONFIG.GEMINI_MODEL_RECEIPT;
         case 'parse':
+            return CONFIG.GEMINI_MODEL_PARSE;
         default:
-            return 'gemini-2.5-flash';
+            return CONFIG.GEMINI_MODEL_RECEIPT;
     }
 }
 
@@ -58,9 +61,32 @@ function selectModel(task, context = {}) {
 // 格式: userId -> { 
 //   mode: 'receipt' | 'amulet' | 'fortune', 
 //   description: '暂存的文字描述',
-//   images: [{ base64, mimeType }]  // 多圖暫存
+//   images: [{ base64, mimeType }],  // 多圖暫存
+//   createdAt: timestamp  // 用於過期清理
 // }
 const userModeMap = new Map();
+const USER_MODE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分鐘過期
+
+// === 清理過期的用戶模式 ===
+function cleanupExpiredModes() {
+    const now = Date.now();
+    for (const [userId, state] of userModeMap.entries()) {
+        if (state.createdAt && (now - state.createdAt > USER_MODE_TIMEOUT_MS)) {
+            console.log(`🧹 清理過期用戶模式: ${userId}`);
+            userModeMap.delete(userId);
+        }
+    }
+}
+
+// === 取得台灣時間今天日期 ===
+function getTaiwanToday() {
+    const now = new Date();
+    const taiwanTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
+    const year = taiwanTime.getFullYear();
+    const month = String(taiwanTime.getMonth() + 1).padStart(2, '0');
+    const day = String(taiwanTime.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
 
 // === 多圖設定 ===
 const MAX_AMULET_IMAGES = 5;  // 最多收集 5 張圖片
@@ -100,6 +126,9 @@ module.exports = async (req, res) => {
 
     // POST 請求：處理 Line 訊息
     if (req.method === 'POST') {
+        // 清理過期的用戶模式
+        cleanupExpiredModes();
+
         // 輸出完整請求內容
         console.log('收到 Webhook 請求, events:', req.body?.events?.length || 0);
         const events = req.body?.events || [];
@@ -1007,7 +1036,7 @@ async function handleTextMessage(event) {
         // 佛牌文案模式（多圖收集模式）
         if (['佛牌', 'พระ', 'พระเครื่อง'].includes(text)) {
             const userId = event.source.userId || 'unknown';
-            userModeMap.set(userId, { mode: 'amulet', description: '', images: [] });
+            userModeMap.set(userId, { mode: 'amulet', description: '', images: [], createdAt: Date.now() });
             await replyToLine(replyToken,
                 '📿 佛牌聖物文案模式\n\n' +
                 '➀ 可先傳文字描述（選填）\n' +
@@ -1026,7 +1055,7 @@ async function handleTextMessage(event) {
         // 語音翻譯模式（點擊後上傳的語音會進行命理解讀翻譯）
         if (['語音翻譯', 'แปล', 'แปลเสียง'].includes(text)) {
             const userId = event.source.userId || 'unknown';
-            userModeMap.set(userId, { mode: 'fortune', description: '' });
+            userModeMap.set(userId, { mode: 'fortune', description: '', createdAt: Date.now() });
             await replyToLine(replyToken,
                 '🔮 語音翻譯模式\n\n' +
                 '請上傳命理語音檔案（m4a/mp3）\n' +
@@ -1931,18 +1960,6 @@ async function appendToSheet(data) {
 
         // 驗證和修正日期
         let finalDate = data.date;
-
-        // 獲取台灣時間的今天日期
-        const getTaiwanToday = () => {
-            const now = new Date();
-            // 轉換為台灣時區 (UTC+8)
-            const taiwanTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
-            const year = taiwanTime.getFullYear();
-            const month = String(taiwanTime.getMonth() + 1).padStart(2, '0');
-            const day = String(taiwanTime.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        };
-
         const todayTaiwan = getTaiwanToday();
 
         // 如果日期為空或無效，使用今天（台灣時間）
