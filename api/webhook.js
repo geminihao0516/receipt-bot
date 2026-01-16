@@ -67,6 +67,57 @@ function selectModel(task, context = {}) {
 const userModeMap = new Map();
 const USER_MODE_TIMEOUT_MS = 30 * 60 * 1000; // 30 分鐘過期
 
+// === API 用量追蹤（in-memory，每日重置）===
+const apiUsageTracker = {
+    date: '',      // 當日日期 YYYY-MM-DD
+    counts: {
+        receipt: 0,   // 收據辨識
+        audio: 0,     // 語音辨識
+        amulet: 0,    // 佛牌文案
+        fortune: 0,   // 命理翻譯
+        parse: 0      // 文字解析
+    }
+};
+
+// === 追蹤 API 使用次數 ===
+function trackApiUsage(task) {
+    const today = getTaiwanToday();
+    if (apiUsageTracker.date !== today) {
+        // 新的一天，重置計數
+        apiUsageTracker.date = today;
+        apiUsageTracker.counts = { receipt: 0, audio: 0, amulet: 0, fortune: 0, parse: 0 };
+        console.log(`📊 API 追蹤：新的一天 ${today}，計數已重置`);
+    }
+    if (apiUsageTracker.counts[task] !== undefined) {
+        apiUsageTracker.counts[task]++;
+        console.log(`📊 API 追蹤：${task} +1，今日共 ${apiUsageTracker.counts[task]} 次`);
+    }
+}
+
+// === 取得 API 用量摘要 ===
+function getApiUsageSummary() {
+    const today = getTaiwanToday();
+    // 如果是新的一天，先重置
+    if (apiUsageTracker.date !== today) {
+        apiUsageTracker.date = today;
+        apiUsageTracker.counts = { receipt: 0, audio: 0, amulet: 0, fortune: 0, parse: 0 };
+    }
+
+    const c = apiUsageTracker.counts;
+    const total = c.receipt + c.audio + c.amulet + c.fortune + c.parse;
+
+    return `📊 今日 API 用量 / โควต้าวันนี้\n` +
+        `📅 ${today}\n\n` +
+        `📷 收據辨識 / ใบเสร็จ: ${c.receipt} 次\n` +
+        `🎙️ 語音辨識 / เสียง: ${c.audio} 次\n` +
+        `📿 佛牌文案 / พระ: ${c.amulet} 次\n` +
+        `🔮 命理翻譯 / โหราศาสตร์: ${c.fortune} 次\n` +
+        `✏️ 文字解析 / ข้อความ: ${c.parse} 次\n\n` +
+        `📈 合計 / รวม: ${total} 次\n\n` +
+        `💡 Gemini 免費版約 15 RPM / 1500 RPD\n` +
+        `💡 ใช้ฟรีประมาณ 15 ครั้ง/นาที`;
+}
+
 // === 清理過期的用戶模式 ===
 function cleanupExpiredModes() {
     const now = Date.now();
@@ -710,6 +761,7 @@ ${text}`;
 
         const fortuneText = result.candidates[0].content.parts[0].text;
         console.log('🔮 命理翻譯成功，字數:', fortuneText.length);
+        trackApiUsage('fortune');
 
         return fortuneText;
 
@@ -871,6 +923,7 @@ ${userInfoSection}
 
         const amuletText = result.candidates[0].content.parts[0].text;
         console.log('📿 多圖佛牌文案生成成功，字數:', amuletText.length);
+        trackApiUsage('amulet');
 
         return amuletText;
 
@@ -920,6 +973,14 @@ const QUICK_REPLY_ITEMS = {
                 type: 'message',
                 label: '🔮 語音翻譯 / แปล',
                 text: '語音翻譯'
+            }
+        },
+        {
+            type: 'action',
+            action: {
+                type: 'message',
+                label: '📊 額度 / โควต้า',
+                text: '額度'
             }
         },
         {
@@ -1007,13 +1068,22 @@ async function handleTextMessage(event) {
                 '📿 佛牌文案 → 拍佛牌 AI 寫文案\n' +
                 '🎙️ 語音記帳 → 錄語音 AI 辨識後記帳\n' +
                 '🔮 語音翻譯 → 命理語音翻成中文解說\n' +
+                '📊 額度查詢 → 查看今日 API 使用量\n' +
                 '✏️ 文字記帳 → 師傅 品項 數量 單價\n\n' +
                 '📷 ถ่ายรูปใบเสร็จ → AI อ่านให้\n' +
                 '📿 ถ่ายรูปพระ → AI เขียนบทความ\n' +
                 '🎙️ อัดเสียง → AI ฟังแล้วบันทึก\n' +
                 '🔮 แปลเสียง → แปลโหราศาสตร์เป็นจีน\n' +
+                '📊 โควต้า → ดูการใช้งาน API วันนี้\n' +
                 '✏️ พิมพ์ → อาจารย์ ของ จำนวน ราคา\n\n' +
                 '👇 點按鈕開始 / กดปุ่มเลย');
+            return;
+        }
+
+        // 額度查詢指令 (Quota Check)
+        if (['額度', '用量', 'โควต้า', 'quota'].includes(text.toLowerCase())) {
+            const usage = getApiUsageSummary();
+            await replyToLine(replyToken, usage);
             return;
         }
 
@@ -1418,6 +1488,7 @@ async function parseTextWithGemini(text) {
 
         const rawText = result.candidates[0].content.parts[0].text;
         console.log('Gemini 文字解析原始回應:', rawText.substring(0, 200) + '...');
+        trackApiUsage('parse');
 
         return extractJSON(rawText, '文字解析');
 
@@ -1564,6 +1635,7 @@ async function recognizeAudio(audioData, duration = 0) {
 
         const recognizedText = result.candidates[0].content.parts[0].text.trim();
         console.log('📝 Gemini 語音識別成功:', recognizedText);
+        trackApiUsage('audio');
 
         return recognizedText;
 
@@ -1682,6 +1754,7 @@ JSON格式（盡量簡潔）：
     }
 
     // 改進的 JSON 解析邏輯
+    trackApiUsage('receipt');
     return extractJSON(rawText, '圖片辨識');
 }
 
