@@ -5,6 +5,7 @@
 
 // === 設定（從環境變數讀取）===
 const { google } = require('googleapis');
+const getFortunePrompt = require('./prompts/fortune');
 
 const CONFIG = {
     // === LINE API ===
@@ -142,31 +143,58 @@ function getTaiwanToday() {
 // === 多圖設定 ===
 const MAX_AMULET_IMAGES = 5;  // 最多收集 5 張圖片
 
+// === 統一訊息常數（中泰雙語）===
+const MESSAGES = {
+    QUOTA_EXCEEDED: {
+        zh: '❌ 免費額度已滿，請稍後再試',
+        th: '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ'
+    },
+    IMAGE_TOO_LARGE: {
+        zh: '❌ 圖片檔案過大 (>4MB)\n請壓縮後重新上傳',
+        th: '❌ ไฟล์ใหญ่เกินไป (>4MB)\nกรุณาบีบอัดแล้วส่งใหม่'
+    },
+    AUDIO_TOO_LARGE: {
+        zh: '❌ 語音檔案太大',
+        th: '❌ ไฟล์เสียงใหญ่เกินไป'
+    },
+    SYSTEM_ERROR: {
+        zh: '❌ 系統錯誤，請稍後再試',
+        th: '❌ ผิดพลาด ลองใหม่ภายหลัง'
+    },
+    RECOGNITION_FAILED: {
+        zh: '❌ 辨識失敗，請重拍清晰照片',
+        th: '❌ อ่านไม่ได้ ถ่ายใหม่ชัดๆนะ'
+    },
+    VOICE_RECOGNITION_FAILED: {
+        zh: '❌ 無法識別語音，請重新錄製\n建議：\n1. 說話清晰\n2. 環境安靜\n3. 靠近麥克風',
+        th: '❌ ฟังไม่ชัด กรุณาอัดใหม่\nคำแนะนำ:\n1. พูดชัดๆ\n2. ที่เงียบๆ\n3. ใกล้ไมค์'
+    },
+    TRANSLATION_FAILED: {
+        zh: '❌ 翻譯處理失敗，請稍後再試',
+        th: '❌ แปลไม่ได้ ลองใหม่ทีหลัง'
+    },
+    PROCESSING_FAILED: {
+        zh: '❌ 處理失敗，請重試',
+        th: '❌ ผิดพลาด ลองใหม่นะ'
+    },
+    MODE_CANCELLED: {
+        zh: '✅ 已取消模式',
+        th: '✅ ยกเลิกโหมดแล้ว'
+    }
+};
+
+// === 取得訊息（中泰合併）===
+function getMessage(key) {
+    const msg = MESSAGES[key] || MESSAGES.SYSTEM_ERROR;
+    return `${msg.zh}\n${msg.th}`;
+}
+
 // === 通用錯誤處理 ===
 async function handleApiError(replyToken, error, context = 'image') {
     console.error(`❌ API 錯誤 (${context}):`, error.message || error);
 
-    const errorMessages = {
-        'QUOTA_EXCEEDED': {
-            zh: '❌ 免費額度已滿，請稍後再試',
-            th: '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ'
-        },
-        'IMAGE_TOO_LARGE': {
-            zh: '❌ 圖片檔案過大 (>4MB)\n請壓縮後重新上傳',
-            th: '❌ ไฟล์ใหญ่เกินไป (>4MB)\nกรุณาบีบอัดแล้วส่งใหม่'
-        },
-        'AUDIO_TOO_LARGE': {
-            zh: '❌ 語音檔案太大',
-            th: '❌ ไฟล์เสียงใหญ่เกินไป'
-        },
-        'default': {
-            zh: '❌ 系統錯誤，請稍後再試',
-            th: '❌ ผิดพลาด ลองใหม่ภายหลัง'
-        }
-    };
-
-    const msg = errorMessages[error.message] || errorMessages['default'];
-    await replyToLine(replyToken, `${msg.zh}\n${msg.th}`);
+    const msgKey = MESSAGES[error.message] ? error.message : 'SYSTEM_ERROR';
+    await replyToLine(replyToken, getMessage(msgKey));
 }
 
 module.exports = async (req, res) => {
@@ -646,84 +674,7 @@ async function handleAudioFileMessage(event) {
 
 // === Gemini 命理翻譯（台灣命理老師口吻）===
 async function translateFortuneText(text, duration = 0) {
-    const prompt = `【角色設定】
-
-你是一位資深的台灣命理老師，長年從事一對一諮詢。說話風格親切穩重、不誇大、不渲染，語氣自然真誠，就像坐在緣主對面慢慢解說。你的重點是把話說清楚、說到心裡，而不是使用術語或理論名詞。
-
-【核心任務】
-
-我將提供一份來自泰國命理師的解讀素材，可能是語音逐字稿、泰文原文，或初步翻譯的中文內容。
-
-請你完整理解該素材後，以素材本身的敘述順序與重點為主軸進行整理與重寫，轉化為一篇「台灣命理老師口吻」的一對一解說文。
-
-全文長度約 800 至 1000 字，重點在於讓緣主聽得懂、聽得進去，而不是完整覆蓋所有命理面向。
-
-【敘述視角與語氣】
-
-全篇一律使用第二人稱，直接對緣主說話。
-
-語氣需自然、沉穩、有節奏，貼近實際面對面諮詢時的說話方式，而非書面報告或教科書語氣。
-
-可參考的自然說法例如：
-「這一段時間你在工作上，會慢慢感覺到方向有些不一樣。」
-「錢的部分，不是沒有進來，而是比較需要你自己顧好流向。」
-
-【台灣語感指引】
-
-可自然融入以下類型語感，但不需刻意每句都使用：
-穩紮穩打、見好就收、順著走就好、不要太衝、量力而為、把話想過再說、慢慢來比較快
-
-【內容組織原則（重要）】
-
-一、內容段落的先後順序，必須以提供的檔案或音檔實際提到的順序為準，不可自行調整成固定模板。
-
-二、若素材先談工作，再談感情或健康，請依該順序撰寫；若內容反覆穿插，請整理成語意連貫但不違背原意的段落。
-
-三、下列面向僅作為「可能出現的主題參考」，不是必須完整涵蓋：
-事業與工作、財運狀況、健康與生活、整體提醒與祝福。
-
-四、素材未提及的面向，請直接略過，不需補寫或推論。
-
-【嚴格禁用詞彙】
-
-全文不得出現以下任何字詞：
-資料、文本、原文、命盤、內容、文件、分析、顯示、指出
-
-【禁止事項】
-
-一、不可出現任何泰文。
-若素材中有咒語或祝福語，僅可轉述為「這是一段祈福的話語，象徵平安與加持」。
-
-二、不可虛構或補齊素材未提及的命理資訊。
-只能在原有敘述基礎上進行語感轉化與順寫整理。
-
-【格式限制】
-
-一、全文僅使用純文字段落。
-二、不使用任何 Markdown 語法或視覺標記。
-三、不使用項目符號、編號列表或括號補充說明。
-四、不使用 emoji 或特殊符號。
-
-【語氣限制】
-
-避免過度口語或聊天感的詞語，例如：
-咱們、嘿嘿、來來來、 啦啦啦
-
-不加入玩笑、流行語或與命理無關的閒聊。
-
-【素材不足時的處理原則】
-
-請嚴格以提供的素材為依據整理與轉述。
-有提到的才寫，沒提到的就不寫，不補、不猜、不延伸。
-
-【最終輸出要求】
-
-請直接輸出完整解說文。
-不加任何前言、說明或提示語。
-文章結尾請以溫暖、穩定、具有方向感的提醒與祝福作結。
-
-【素材內容】
-${text}`;
+    const prompt = getFortunePrompt(text);
 
     // 智慧選擇模型：> 3分鐘用 Pro
     const model = selectModel('fortune', { duration });
@@ -1499,8 +1450,8 @@ async function parseTextWithGemini(text) {
     }
 }
 
-// === 從 Line 下載圖片 ===
-async function getImageFromLine(messageId) {
+// === 從 Line 下載內容（通用函數）===
+async function getContentFromLine(messageId, type = 'image') {
     const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
 
     const response = await fetch(url, {
@@ -1509,55 +1460,41 @@ async function getImageFromLine(messageId) {
         }
     });
 
-    // 檢查 LINE API 回應
     if (!response.ok) {
-        console.error(`❌ LINE 圖片下載失敗: ${response.status} ${response.statusText}`);
+        console.error(`❌ LINE ${type}下載失敗: ${response.status} ${response.statusText}`);
         throw new Error('LINE_API_ERROR');
     }
 
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
-    const imageBuffer = Buffer.from(await response.arrayBuffer());
+    const rawContentType = response.headers.get('content-type') || (type === 'audio' ? 'audio/m4a' : 'image/jpeg');
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const sizeKB = (buffer.length / 1024).toFixed(2);
 
-    console.log(`下載圖片: ${(imageBuffer.length / 1024).toFixed(2)}KB, MIME: ${contentType}`);
+    // 處理 MIME type
+    let mimeType = rawContentType;
+    if (type === 'audio' && (rawContentType.includes('m4a') || rawContentType.includes('aac'))) {
+        mimeType = 'audio/mp4';
+        console.log(`🔄 MIME 轉換: ${rawContentType} → ${mimeType}`);
+    }
 
-    return { buffer: imageBuffer, mimeType: contentType };
+    console.log(`下載${type === 'audio' ? '語音' : '圖片'}: ${sizeKB}KB, MIME: ${mimeType}`);
+
+    // 檔案大小檢查
+    const maxSizeMB = type === 'audio' ? CONFIG.MAX_AUDIO_SIZE_MB : CONFIG.MAX_IMAGE_SIZE_MB;
+    if (buffer.length / (1024 * 1024) > maxSizeMB) {
+        throw new Error(type === 'audio' ? 'AUDIO_TOO_LARGE' : 'IMAGE_TOO_LARGE');
+    }
+
+    return { buffer, mimeType };
 }
 
-// === 從 Line 下載語音 ===
+// === 從 Line 下載圖片（wrapper）===
+async function getImageFromLine(messageId) {
+    return getContentFromLine(messageId, 'image');
+}
+
+// === 從 Line 下載語音（wrapper）===
 async function getAudioFromLine(messageId) {
-    const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
-
-    const response = await fetch(url, {
-        headers: {
-            'Authorization': `Bearer ${CONFIG.LINE_CHANNEL_ACCESS_TOKEN}`
-        }
-    });
-
-    // 檢查 LINE API 回應
-    if (!response.ok) {
-        console.error(`❌ LINE 語音下載失敗: ${response.status} ${response.statusText}`);
-        throw new Error('LINE_API_ERROR');
-    }
-
-    const rawContentType = response.headers.get('content-type') || 'audio/m4a';
-    const audioBuffer = Buffer.from(await response.arrayBuffer());
-
-    // 轉換 MIME type：LINE 的 audio/x-m4a 和 audio/m4a 需轉換為 Gemini 支援的 audio/mp4
-    let contentType = rawContentType;
-    if (rawContentType.includes('m4a') || rawContentType.includes('aac')) {
-        contentType = 'audio/mp4';
-        console.log(`🔄 MIME 轉換: ${rawContentType} → ${contentType}`);
-    }
-
-    console.log(`下載語音: ${(audioBuffer.length / 1024).toFixed(2)}KB, 原始MIME: ${rawContentType}, 使用MIME: ${contentType}`);
-
-    // 檢查檔案大小
-    const sizeInMB = audioBuffer.length / (1024 * 1024);
-    if (sizeInMB > CONFIG.MAX_AUDIO_SIZE_MB) {
-        throw new Error('AUDIO_TOO_LARGE');
-    }
-
-    return { buffer: audioBuffer, mimeType: contentType };
+    return getContentFromLine(messageId, 'audio');
 }
 
 // === Gemini 語音識別（支援中文+泰文）===
@@ -1998,11 +1935,15 @@ async function sendPush(userId, message, quickReplyType = 'default') {
     }
 }
 
-// === 寫入 Google Sheets ===
-async function appendToSheet(data) {
-    if (!CONFIG.GOOGLE_SERVICE_ACCOUNT_EMAIL || !CONFIG.GOOGLE_PRIVATE_KEY) {
-        console.warn('⚠️ 未設定 Google Service Account，跳過寫入 Sheet');
-        return;
+// === Google Sheets Client 快取 ===
+let cachedSheetsClient = null;
+let cachedAuthExpiry = 0;
+
+async function getSheetsClient() {
+    // 檢查快取是否有效（55分鐘內）
+    if (cachedSheetsClient && Date.now() < cachedAuthExpiry) {
+        console.log('📋 使用快取的 Sheets Client');
+        return cachedSheetsClient;
     }
 
     // 自動修復常見的 Email 複製錯誤
@@ -2011,25 +1952,36 @@ async function appendToSheet(data) {
         fixedEmail = 'r' + fixedEmail;
     }
 
-    // 強制修復 Private Key 格式 (處理所有可能的換行問題)
+    // 強制修復 Private Key 格式
     const fixedKey = CONFIG.GOOGLE_PRIVATE_KEY
         .replace(/\\n/g, '\n')
         .replace(/"/g, '');
 
+    console.log('🔄 初始化新的 Google Auth...');
+    const auth = new google.auth.GoogleAuth({
+        credentials: {
+            client_email: fixedEmail,
+            private_key: fixedKey,
+        },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    const client = await auth.getClient();
+    cachedSheetsClient = google.sheets({ version: 'v4', auth: client });
+    cachedAuthExpiry = Date.now() + 55 * 60 * 1000; // 55分鐘後過期
+
+    return cachedSheetsClient;
+}
+
+// === 寫入 Google Sheets ===
+async function appendToSheet(data) {
+    if (!CONFIG.GOOGLE_SERVICE_ACCOUNT_EMAIL || !CONFIG.GOOGLE_PRIVATE_KEY) {
+        console.warn('⚠️ 未設定 Google Service Account，跳過寫入 Sheet');
+        return;
+    }
+
     try {
-        console.log('正在初始化 Google Auth...');
-
-        // 使用更穩健的 GoogleAuth 方式
-        const auth = new google.auth.GoogleAuth({
-            credentials: {
-                client_email: fixedEmail,
-                private_key: fixedKey,
-            },
-            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-        });
-
-        const client = await auth.getClient();
-        const sheets = google.sheets({ version: 'v4', auth: client });
+        const sheets = await getSheetsClient();
 
         // 驗證和修正日期
         let finalDate = data.date;
@@ -2046,11 +1998,9 @@ async function appendToSheet(data) {
 
             // 檢查日期是否有效且合理（不是未來日期）
             if (isNaN(dateObj.getTime())) {
-                // 無效日期，使用今天
                 finalDate = todayTaiwan;
                 console.log(`⚠️ 日期格式無效 (${data.date})，使用今天（台灣時間）: ${finalDate}`);
             } else if (dateObj > todayObj) {
-                // 未來日期，使用今天
                 finalDate = todayTaiwan;
                 console.log(`⚠️ 日期是未來 (${data.date})，使用今天（台灣時間）: ${finalDate}`);
             } else {
@@ -2071,7 +2021,7 @@ async function appendToSheet(data) {
 
         await sheets.spreadsheets.values.append({
             spreadsheetId: CONFIG.SPREADSHEET_ID,
-            range: `${CONFIG.SHEET_NAME}!A:G`, // 假設資料在 A~G 欄
+            range: `${CONFIG.SHEET_NAME}!A:G`,
             valueInputOption: 'USER_ENTERED',
             requestBody: { values: rows }
         });
