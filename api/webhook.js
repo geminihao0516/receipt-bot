@@ -780,7 +780,7 @@ async function translateFortuneText(text, duration = 0) {
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
                     temperature: 0.7,  // 適中創意度
-                    maxOutputTokens: 4096  // 較長解說文
+                    maxOutputTokens: 8192  // 確保完整輸出，避免截斷
                 }
             })
         });
@@ -1730,7 +1730,7 @@ async function recognizeVideoAudio(videoData, duration = 0) {
                 }],
                 generationConfig: {
                     temperature: 0.1,
-                    maxOutputTokens: 2048
+                    maxOutputTokens: 8192  // 影片可能較長，需要更多 token
                 }
             })
         });
