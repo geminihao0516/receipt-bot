@@ -30,6 +30,7 @@ const CONFIG = {
     // === 限制常數 ===
     MAX_IMAGE_SIZE_MB: 4,
     MAX_AUDIO_SIZE_MB: 10,
+    MAX_VIDEO_SIZE_MB: 20,  // 影片最大 20MB
     MAX_AUDIO_DURATION_MS: 60000,  // 一般語音記帳 60 秒限制
     MAX_LINE_MESSAGE_LENGTH: 4500  // LINE 限制 5000，保留 buffer
 };
@@ -266,6 +267,21 @@ module.exports = async (req, res) => {
                             '⚠️ ไม่รองรับไฟล์นี้\n' +
                             'กรุณาใช้การอัดเสียงในแอป LINE\n' +
                             'หรืออัปโหลดไฟล์ m4a/mp3'
+                        );
+                    }
+                } else if (event.message.type === 'video') {
+                    // 處理影片（命理模式下提取音軌翻譯）
+                    const userState = userModeMap.get(userId) || { mode: 'receipt' };
+                    if (userState.mode === 'fortune') {
+                        await handleFortuneVideoMessage(event);
+                        userModeMap.delete(userId);
+                    } else {
+                        // 非命理模式，提示用戶
+                        await replyToLine(event.replyToken,
+                            '⚠️ 影片功能僅在「語音翻譯模式」下可用\n' +
+                            '請先點選「🔮 語音翻譯」按鈕\n\n' +
+                            '⚠️ วิดีโอใช้ได้เฉพาะโหมด「แปลเสียง」\n' +
+                            'กด「🔮 แปลเสียง」ก่อนนะ'
                         );
                     }
                 }
@@ -599,6 +615,81 @@ async function handleFortuneFileMessage(event) {
             await replyToLine(event.replyToken,
                 '❌ 免費額度已滿，請稍後再試\n' +
                 '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ',
+                null, 'fortune'
+            );
+        } else {
+            await replyToLine(event.replyToken,
+                '❌ 處理失敗，請重試\n' +
+                '❌ ผิดพลาด ลองใหม่นะ',
+                null, 'fortune'
+            );
+        }
+    }
+}
+
+// === 處理命理影片訊息（提取音軌翻譯）===
+async function handleFortuneVideoMessage(event) {
+    try {
+        const messageId = event.message.id;
+        const replyToken = event.replyToken;
+        const duration = event.message.duration || 60000; // 影片長度（毫秒）
+
+        console.log(`收到命理影片: ${messageId}, 長度: ${duration}ms`);
+
+        // 從 LINE 下載影片
+        const videoData = await getVideoFromLine(messageId);
+
+        // 使用 Gemini 多模態處理影片音軌
+        const recognizedText = await recognizeVideoAudio(videoData, duration);
+
+        if (!recognizedText || recognizedText.trim() === '') {
+            await replyToLine(replyToken,
+                '❌ 無法識別影片中的語音\n' +
+                '建議：\n' +
+                '1. 確認影片有音軌\n' +
+                '2. 語音清晰\n' +
+                '3. 檔案未損壞\n\n' +
+                '❌ ฟังเสียงในวิดีโอไม่ชัด\n' +
+                'ตรวจสอบ:\n' +
+                '1. มีเสียงในคลิป\n' +
+                '2. เสียงชัด\n' +
+                '3. ไฟล์ไม่เสียหาย',
+                null, 'fortune'
+            );
+            return;
+        }
+
+        console.log(`✅ 命理影片語音識別成功，字數: ${recognizedText.length}`);
+
+        // 使用命理老師提示詞進行翻譯
+        const fortuneText = await translateFortuneText(recognizedText, duration);
+
+        if (!fortuneText) {
+            await replyToLine(replyToken,
+                '❌ 翻譯處理失敗，請稍後再試\n' +
+                '❌ แปลไม่ได้ ลองใหม่ทีหลัง',
+                null, 'fortune'
+            );
+            return;
+        }
+
+        // 回傳翻譯結果
+        await replyToLine(replyToken, fortuneText);
+
+    } catch (error) {
+        console.error('handleFortuneVideoMessage error:', error);
+        if (error.message === 'QUOTA_EXCEEDED') {
+            await replyToLine(event.replyToken,
+                '❌ 免費額度已滿，請稍後再試\n' +
+                '❌ เกินโควต้าแล้ว ลองใหม่ทีหลังนะ',
+                null, 'fortune'
+            );
+        } else if (error.message === 'VIDEO_TOO_LARGE') {
+            await replyToLine(event.replyToken,
+                '❌ 影片檔案太大（超過 20MB）\n' +
+                '請壓縮後重試\n\n' +
+                '❌ วิดีโอใหญ่เกินไป (>20MB)\n' +
+                'กรุณาบีบอัดแล้วลองใหม่',
                 null, 'fortune'
             );
         } else {
@@ -1080,10 +1171,12 @@ async function handleTextMessage(event) {
             await replyToLine(replyToken,
                 '🔮 語音翻譯模式\n\n' +
                 '請上傳命理語音檔案（m4a/mp3）\n' +
+                '或影片檔案（mp4）\n' +
                 '或使用 LINE 內建錄音\n' +
                 'AI 會將內容轉化為台灣命理老師解說文\n\n' +
                 '🔮 โหมดแปลเสียง\n\n' +
                 'อัปโหลดไฟล์เสียง (m4a/mp3)\n' +
+                'หรือวิดีโอ (mp4)\n' +
                 'หรืออัดเสียงในแอป LINE\n' +
                 'AI จะแปลเป็นคำอธิบาย\n\n' +
                 '👇 點按鈕可取消離開 / กดยกเลิกได้',
@@ -1474,14 +1567,27 @@ async function getContentFromLine(messageId, type = 'image') {
     if (type === 'audio' && (rawContentType.includes('m4a') || rawContentType.includes('aac'))) {
         mimeType = 'audio/mp4';
         console.log(`🔄 MIME 轉換: ${rawContentType} → ${mimeType}`);
+    } else if (type === 'video') {
+        // 影片 MIME 處理
+        if (!rawContentType.includes('video/')) {
+            mimeType = 'video/mp4';
+        }
+        console.log(`🎥 影片 MIME: ${mimeType}`);
     }
 
-    console.log(`下載${type === 'audio' ? '語音' : '圖片'}: ${sizeKB}KB, MIME: ${mimeType}`);
+    const typeLabels = { audio: '語音', image: '圖片', video: '影片' };
+    console.log(`下載${typeLabels[type] || type}: ${sizeKB}KB, MIME: ${mimeType}`);
 
     // 檔案大小檢查
-    const maxSizeMB = type === 'audio' ? CONFIG.MAX_AUDIO_SIZE_MB : CONFIG.MAX_IMAGE_SIZE_MB;
+    const maxSizeMap = {
+        audio: CONFIG.MAX_AUDIO_SIZE_MB,
+        image: CONFIG.MAX_IMAGE_SIZE_MB,
+        video: CONFIG.MAX_VIDEO_SIZE_MB
+    };
+    const maxSizeMB = maxSizeMap[type] || CONFIG.MAX_IMAGE_SIZE_MB;
     if (buffer.length / (1024 * 1024) > maxSizeMB) {
-        throw new Error(type === 'audio' ? 'AUDIO_TOO_LARGE' : 'IMAGE_TOO_LARGE');
+        const errorMap = { audio: 'AUDIO_TOO_LARGE', image: 'IMAGE_TOO_LARGE', video: 'VIDEO_TOO_LARGE' };
+        throw new Error(errorMap[type] || 'FILE_TOO_LARGE');
     }
 
     return { buffer, mimeType };
@@ -1495,6 +1601,11 @@ async function getImageFromLine(messageId) {
 // === 從 Line 下載語音（wrapper）===
 async function getAudioFromLine(messageId) {
     return getContentFromLine(messageId, 'audio');
+}
+
+// === 從 Line 下載影片（wrapper）===
+async function getVideoFromLine(messageId) {
+    return getContentFromLine(messageId, 'video');
 }
 
 // === Gemini 語音識別（支援中文+泰文）===
@@ -1579,6 +1690,94 @@ async function recognizeAudio(audioData, duration = 0) {
     } catch (error) {
         if (error.message === 'QUOTA_EXCEEDED') throw error;
         console.error('❌ 語音識別錯誤:', error.message || error);
+        console.error('❌ 錯誤堆疊:', error.stack);
+        return null;
+    }
+}
+
+// === Gemini 影片音軌識別（用於命理翻譯）===
+async function recognizeVideoAudio(videoData, duration = 0) {
+    const { buffer: videoBuffer, mimeType } = videoData;
+    const base64Video = videoBuffer.toString('base64');
+
+    const prompt = `請將這段影片中的語音轉換成文字。
+
+語言：可能是繁體中文、泰文或兩者混合
+要求：
+1. 準確轉錄所有聽到的內容
+2. 保持原語言，不要翻譯
+3. 如果同時有中文和泰文，都要寫出來
+4. 去掉語氣詞（嗯、啊等）
+5. 忽略背景音樂或雜音
+
+只回傳轉錄的文字，不要有其他說明。`;
+
+    // 智慧選擇模型：> 3分鐘用 Pro
+    const model = selectModel('fortune', { duration });
+    console.log(`🎥 影片語音識別使用模型: ${model} (影片長度: ${(duration / 1000 / 60).toFixed(1)}分鐘)`);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [
+                        { text: prompt },
+                        { inline_data: { mime_type: mimeType, data: base64Video } }
+                    ]
+                }],
+                generationConfig: {
+                    temperature: 0.1,
+                    maxOutputTokens: 2048
+                }
+            })
+        });
+
+        const result = await response.json();
+
+        console.log('📥 Gemini 影片 API 回應狀態:', response.status);
+
+        // 處理錯誤
+        if (result.error) {
+            console.error('❌ Gemini 影片 API 錯誤:', JSON.stringify(result.error, null, 2));
+            if (result.error.code === 429 || result.error.status === 'RESOURCE_EXHAUSTED') {
+                throw new Error('QUOTA_EXCEEDED');
+            }
+            // 格式不支援的錯誤
+            if (result.error.message && result.error.message.includes('Unsupported')) {
+                console.error('❌ 影片格式不支援:', mimeType);
+            }
+            return null;
+        }
+
+        if (!result.candidates || !result.candidates[0]) {
+            console.error('❌ Gemini 影片 API 無回應，完整結果:', JSON.stringify(result, null, 2));
+            return null;
+        }
+
+        // 檢查 finishReason
+        const finishReason = result.candidates[0].finishReason;
+        if (finishReason === 'SAFETY') {
+            console.error('❌ 影片內容被安全過濾器阻擋');
+            return null;
+        }
+
+        if (!result.candidates[0].content || !result.candidates[0].content.parts || !result.candidates[0].content.parts[0]) {
+            console.error('❌ Gemini 影片 API 回應格式異常:', JSON.stringify(result.candidates[0], null, 2));
+            return null;
+        }
+
+        const recognizedText = result.candidates[0].content.parts[0].text.trim();
+        console.log('📝 Gemini 影片語音識別成功:', recognizedText.substring(0, 100) + '...');
+        trackApiUsage('fortune');  // 計入命理翻譯用量
+
+        return recognizedText;
+
+    } catch (error) {
+        if (error.message === 'QUOTA_EXCEEDED') throw error;
+        console.error('❌ 影片語音識別錯誤:', error.message || error);
         console.error('❌ 錯誤堆疊:', error.stack);
         return null;
     }
