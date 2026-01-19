@@ -1086,6 +1086,13 @@ const FORTUNE_QUICK_REPLY = {
         {
             type: 'action',
             action: {
+                type: 'cameraRoll',
+                label: '📁 選檔案 / เลือกไฟล์'
+            }
+        },
+        {
+            type: 'action',
+            action: {
                 type: 'message',
                 label: '❌ 取消離開 / ยกเลิก',
                 text: '取消'
