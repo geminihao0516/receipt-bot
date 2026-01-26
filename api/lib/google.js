@@ -20,9 +20,8 @@ async function getGoogleAuth() {
         fixedEmail = 'r' + fixedEmail;
     }
 
-    const fixedKey = CONFIG.GOOGLE_PRIVATE_KEY
-        .replace(/\\n/g, '\n')
-        .replace(/"/g, '');
+    // PRIVATE_KEY 已在 config.js 處理過
+    const fixedKey = CONFIG.GOOGLE_PRIVATE_KEY;
 
     console.log('🔄 初始化新的 Google Auth（Sheets + Drive）...');
     cachedGoogleAuth = new google.auth.GoogleAuth({
