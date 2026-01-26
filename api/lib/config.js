@@ -21,6 +21,7 @@ const CONFIG = {
 
     // === Google Drive ===
     GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID || '146-54T2RF6XDwceOr60mjl26hRoNGU4C',
+    APPS_SCRIPT_URL: process.env.APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbyV-PwKdqNbWDSmxNk40rWRz0r7Meg_9v9h_9yeaawMAsbeU_i24owSF_hjTpdl0Uhy/exec',
 
     // === 限制常數 ===
     MAX_IMAGE_SIZE_MB: 4,

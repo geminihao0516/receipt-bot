@@ -63,9 +63,8 @@ async function getDriveClient() {
     return cachedDriveClient;
 }
 
-// === 上傳圖片到 Google Drive ===
+// === 上傳圖片到 Google Drive（透過 Apps Script 代理）===
 async function uploadImageToDrive(imageData, receiptData) {
-    const drive = await getDriveClient();
     const { buffer, mimeType } = imageData;
 
     const now = new Date();
@@ -74,38 +73,28 @@ async function uploadImageToDrive(imageData, receiptData) {
     const dateStr = receiptData.date || getTaiwanToday();
     const fileName = `${dateStr}_${masterName}_${timestamp}.jpg`;
 
-    console.log(`📤 上傳圖片到 Drive: ${fileName}`);
+    console.log(`📤 上傳圖片到 Drive（via Apps Script）: ${fileName}`);
 
-    const bufferStream = new Readable();
-    bufferStream.push(buffer);
-    bufferStream.push(null);
+    const base64Image = buffer.toString('base64');
 
-    const response = await drive.files.create({
-        requestBody: {
-            name: fileName,
-            parents: [CONFIG.GOOGLE_DRIVE_FOLDER_ID]
-        },
-        media: {
-            mimeType: mimeType,
-            body: bufferStream
-        },
-        fields: 'id, webViewLink',
-        supportsAllDrives: true
+    const response = await fetch(CONFIG.APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            image: base64Image,
+            fileName: fileName,
+            folderId: CONFIG.GOOGLE_DRIVE_FOLDER_ID
+        })
     });
 
-    const fileId = response.data.id;
-    const webViewLink = response.data.webViewLink;
+    const result = await response.json();
 
-    await drive.permissions.create({
-        fileId: fileId,
-        requestBody: {
-            role: 'reader',
-            type: 'anyone'
-        }
-    });
+    if (!result.success) {
+        throw new Error(result.error || 'Apps Script 上傳失敗');
+    }
 
-    console.log(`✅ 圖片上傳成功: ${webViewLink}`);
-    return webViewLink;
+    console.log(`✅ 圖片上傳成功: ${result.webViewLink}`);
+    return result.webViewLink;
 }
 
 // === 寫入 Google Sheets ===
