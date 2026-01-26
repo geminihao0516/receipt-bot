@@ -89,7 +89,8 @@ async function uploadImageToDrive(imageData, receiptData) {
             mimeType: mimeType,
             body: bufferStream
         },
-        fields: 'id, webViewLink'
+        fields: 'id, webViewLink',
+        supportsAllDrives: true
     });
 
     const fileId = response.data.id;
