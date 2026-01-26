@@ -27,6 +27,9 @@ const CONFIG = {
     GOOGLE_SERVICE_ACCOUNT_EMAIL: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     GOOGLE_PRIVATE_KEY: (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n').replace(/"/g, ''),
 
+    // === Google Drive ===
+    GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID || '1AbrFzdtCa_JPgYohkS-FemAdHZ5v_teD',
+
     // === 限制常數 ===
     MAX_IMAGE_SIZE_MB: 4,
     MAX_AUDIO_SIZE_MB: 10,
@@ -356,12 +359,22 @@ async function handleImageMessage(event) {
             return;
         }
 
+        // === 辨識成功，上傳圖片到 Google Drive ===
+        let imageUrl = '';
+        try {
+            imageUrl = await uploadImageToDrive(imageData, receiptData);
+            console.log('📤 圖片已上傳到 Drive:', imageUrl);
+        } catch (uploadError) {
+            console.error('⚠️ 圖片上傳失敗（不影響記帳）:', uploadError.message);
+            // 上傳失敗不影響記帳流程
+        }
+
         // 辨識成功，格式化回覆
         const summary = formatSummary(receiptData);
         await replyToLine(replyToken, summary);
 
-        // 寫入 Google Sheet
-        await appendToSheet(receiptData);
+        // 寫入 Google Sheet（含圖片連結）
+        await appendToSheet(receiptData, imageUrl);
 
     } catch (error) {
         await handleApiError(event.replyToken, error, 'receipt');
@@ -2141,15 +2154,16 @@ async function sendPush(userId, message, quickReplyType = 'default') {
     }
 }
 
-// === Google Sheets Client 快取 ===
+// === Google Auth 快取（Sheets + Drive 共用）===
+let cachedGoogleAuth = null;
 let cachedSheetsClient = null;
+let cachedDriveClient = null;
 let cachedAuthExpiry = 0;
 
-async function getSheetsClient() {
-    // 檢查快取是否有效（55分鐘內）
-    if (cachedSheetsClient && Date.now() < cachedAuthExpiry) {
-        console.log('📋 使用快取的 Sheets Client');
-        return cachedSheetsClient;
+// === 取得共用的 Google Auth ===
+async function getGoogleAuth() {
+    if (cachedGoogleAuth && Date.now() < cachedAuthExpiry) {
+        return cachedGoogleAuth;
     }
 
     // 自動修復常見的 Email 複製錯誤
@@ -2163,24 +2177,96 @@ async function getSheetsClient() {
         .replace(/\\n/g, '\n')
         .replace(/"/g, '');
 
-    console.log('🔄 初始化新的 Google Auth...');
-    const auth = new google.auth.GoogleAuth({
+    console.log('🔄 初始化新的 Google Auth（Sheets + Drive）...');
+    cachedGoogleAuth = new google.auth.GoogleAuth({
         credentials: {
             client_email: fixedEmail,
             private_key: fixedKey,
         },
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        scopes: [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive.file'
+        ],
     });
+    cachedAuthExpiry = Date.now() + 55 * 60 * 1000;
 
+    return cachedGoogleAuth;
+}
+
+async function getSheetsClient() {
+    if (cachedSheetsClient && Date.now() < cachedAuthExpiry) {
+        console.log('📋 使用快取的 Sheets Client');
+        return cachedSheetsClient;
+    }
+
+    const auth = await getGoogleAuth();
     const client = await auth.getClient();
     cachedSheetsClient = google.sheets({ version: 'v4', auth: client });
-    cachedAuthExpiry = Date.now() + 55 * 60 * 1000; // 55分鐘後過期
-
     return cachedSheetsClient;
 }
 
+async function getDriveClient() {
+    if (cachedDriveClient && Date.now() < cachedAuthExpiry) {
+        console.log('📁 使用快取的 Drive Client');
+        return cachedDriveClient;
+    }
+
+    const auth = await getGoogleAuth();
+    const client = await auth.getClient();
+    cachedDriveClient = google.drive({ version: 'v3', auth: client });
+    return cachedDriveClient;
+}
+
+// === 上傳圖片到 Google Drive ===
+async function uploadImageToDrive(imageData, receiptData) {
+    const drive = await getDriveClient();
+    const { buffer, mimeType } = imageData;
+
+    // 產生檔名：日期_師傅_時間戳.jpg
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const masterName = (receiptData.master || '未知').replace(/[\\/:*?"<>|]/g, '_');
+    const dateStr = receiptData.date || getTaiwanToday();
+    const fileName = `${dateStr}_${masterName}_${timestamp}.jpg`;
+
+    console.log(`📤 上傳圖片到 Drive: ${fileName}`);
+
+    // 使用 Readable stream 上傳
+    const { Readable } = require('stream');
+    const bufferStream = new Readable();
+    bufferStream.push(buffer);
+    bufferStream.push(null);
+
+    const response = await drive.files.create({
+        requestBody: {
+            name: fileName,
+            parents: [CONFIG.GOOGLE_DRIVE_FOLDER_ID]
+        },
+        media: {
+            mimeType: mimeType,
+            body: bufferStream
+        },
+        fields: 'id, webViewLink'
+    });
+
+    const fileId = response.data.id;
+    const webViewLink = response.data.webViewLink;
+
+    // 設定為「知道連結的人都能檢視」
+    await drive.permissions.create({
+        fileId: fileId,
+        requestBody: {
+            role: 'reader',
+            type: 'anyone'
+        }
+    });
+
+    console.log(`✅ 圖片上傳成功: ${webViewLink}`);
+    return webViewLink;
+}
+
 // === 寫入 Google Sheets ===
-async function appendToSheet(data) {
+async function appendToSheet(data, imageUrl = '') {
     if (!CONFIG.GOOGLE_SERVICE_ACCOUNT_EMAIL || !CONFIG.GOOGLE_PRIVATE_KEY) {
         console.warn('⚠️ 未設定 Google Service Account，跳過寫入 Sheet');
         return;
@@ -2214,15 +2300,15 @@ async function appendToSheet(data) {
             }
         }
 
-        // 準備寫入資料
-        const rows = data.items.map(item => [
-            finalDate,          //日期（已驗證）
-            data.master,        //師傅/店家
-            item.name,          //品項
-            item.qty,           //數量
-            item.price,         //單價
-            item.total,         //總價
-            data.note || ''     //備註
+        // 準備寫入資料（A-G 欄：日期、師傅、品項、數量、單價、總價、圖片連結）
+        const rows = data.items.map((item, index) => [
+            finalDate,          // A: 日期（已驗證）
+            data.master,        // B: 師傅/店家
+            item.name,          // C: 品項
+            item.qty,           // D: 數量
+            item.price,         // E: 單價
+            item.total,         // F: 總價
+            index === 0 ? imageUrl : ''  // G: 圖片連結（只有第一筆寫入）
         ]);
 
         await sheets.spreadsheets.values.append({
