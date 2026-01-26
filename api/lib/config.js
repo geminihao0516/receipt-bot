@@ -20,7 +20,7 @@ const CONFIG = {
     GOOGLE_PRIVATE_KEY: (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n').replace(/"/g, ''),
 
     // === Google Drive ===
-    GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID || '1AbrFzdtCa_JPgYohkS-FemAdHZ5v_teD',
+    GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID || '146-54T2RF6XDwceOr60mjl26hRoNGU4C',
 
     // === 限制常數 ===
     MAX_IMAGE_SIZE_MB: 4,
